@@ -1,0 +1,297 @@
+#!/bin/bash
+set -eo pipefail
+
+# ========================================
+# Ingestor - Content processing system
+# 
+# A CLI tool for processing various content types
+# and storing extracted data in SQLite databases
+# using Claude AI for intelligent processing.
+# ========================================
+
+# Version
+INGESTOR_VERSION="0.1.0"
+
+# Base paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+INGESTOR_HOME="${HOME}/.ingestor"
+TEMP_DIR="${INGESTOR_HOME}/tmp"
+CONFIG_DIR="${INGESTOR_HOME}/config"
+DB_DIR="${INGESTOR_HOME}/databases"
+LOG_DIR="${INGESTOR_HOME}/logs"
+
+# Import modules - adjust paths as needed
+source "${PROJECT_ROOT}/src/modules/config.sh"
+source "${PROJECT_ROOT}/src/modules/logging.sh"
+source "${PROJECT_ROOT}/src/modules/content.sh"
+source "${PROJECT_ROOT}/src/modules/database.sh"
+source "${PROJECT_ROOT}/src/modules/claude.sh"
+
+# Initialize environment
+setup_environment() {
+    # Create necessary directories
+    mkdir -p "${TEMP_DIR}" "${CONFIG_DIR}" "${DB_DIR}" "${LOG_DIR}"
+    
+    # Initialize logging
+    init_logging
+    
+    # Load configuration
+    load_config
+    
+    # Setup cleanup trap
+    trap cleanup EXIT INT TERM
+    
+    log_info "Ingestor v${INGESTOR_VERSION} initialized"
+}
+
+# Cleanup function
+cleanup() {
+    log_info "Cleaning up temporary files"
+    rm -rf "${TEMP_DIR:?}"/*
+    log_info "Ingestor session ended"
+}
+
+# Show help
+show_help() {
+    cat << EOF
+Ingestor v${INGESTOR_VERSION} - Content processing system
+
+Usage: ingestor [OPTIONS]
+
+Options:
+  --database, -d DB_NAME    Specify database to use
+  --file, -f FILE_PATH      Process a specific file
+  --batch, -b               Run in batch mode
+  --config, -c CONFIG       Use specific configuration file
+  --list-dbs, -l            List available databases
+  --init-db, -i DB_NAME     Initialize a new database
+  --verbose, -v             Enable verbose logging
+  --help, -h                Show this help message
+
+Examples:
+  ingestor -d research           # Interactive mode with research database
+  ingestor -f image.jpg -d media # Process image.jpg into media database
+  ingestor -b -d code            # Batch processing into code database
+
+For more information, visit: https://github.com/yourusername/ingestor
+EOF
+}
+
+# Process command line arguments
+process_arguments() {
+    DATABASE=""
+    MODE="interactive"
+    FILE_PATH=""
+    VERBOSE=false
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --database|-d)
+                DATABASE="$2"
+                shift 2
+                ;;
+            --file|-f)
+                MODE="file"
+                FILE_PATH="$2"
+                shift 2
+                ;;
+            --batch|-b)
+                MODE="batch"
+                shift
+                ;;
+            --config|-c)
+                CONFIG_FILE="$2"
+                shift 2
+                ;;
+            --list-dbs|-l)
+                MODE="list-dbs"
+                shift
+                ;;
+            --init-db|-i)
+                MODE="init-db"
+                DB_NAME="$2"
+                shift 2
+                ;;
+            --verbose|-v)
+                VERBOSE=true
+                shift
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Check requirements based on mode
+    if [[ "$MODE" != "list-dbs" && "$MODE" != "help" && -z "$DATABASE" ]]; then
+        if [[ "$MODE" != "init-db" ]]; then
+            log_error "Database name is required. Use --database option."
+            exit 1
+        fi
+    fi
+    
+    if [[ "$MODE" = "file" && -z "$FILE_PATH" ]]; then
+        log_error "File path is required for file mode. Use --file option."
+        exit 1
+    fi
+}
+
+# Run interactive input mode
+run_interactive_mode() {
+    log_info "Starting interactive mode with database: $DATABASE"
+    
+    echo "=== Ingestor Interactive Mode ==="
+    echo "Using database: $DATABASE"
+    echo "Paste or type content, end with CTRL+D (EOF)"
+    
+    # Create temp file for input
+    local temp_file="${TEMP_DIR}/interactive_input_$(date +%s).tmp"
+    
+    # Collect input until EOF
+    cat > "$temp_file"
+    
+    # Process the collected input
+    process_content "$temp_file" "$DATABASE"
+    
+    # Cleanup
+    rm -f "$temp_file"
+}
+
+# Process a specific file
+process_file() {
+    local file_path="$1"
+    local database="$2"
+    
+    if [[ ! -f "$file_path" ]]; then
+        log_error "File not found: $file_path"
+        exit 1
+    fi
+    
+    log_info "Processing file: $file_path for database: $database"
+    
+    # Detect content type and process accordingly
+    local content_type=$(detect_content_type "$file_path")
+    log_info "Detected content type: $content_type"
+    
+    # Process based on content type
+    process_content "$file_path" "$database"
+    
+    log_info "File processing completed"
+}
+
+# List available databases
+list_databases() {
+    log_info "Listing available databases"
+    
+    echo "Available Databases:"
+    echo "-------------------"
+    
+    if [[ -d "$DB_DIR" ]]; then
+        local count=0
+        
+        for db in "$DB_DIR"/*.sqlite; do
+            if [[ -f "$db" ]]; then
+                local db_name=$(basename "$db" .sqlite)
+                local tables=$(sqlite3 "$db" ".tables")
+                local size=$(du -h "$db" | cut -f1)
+                
+                echo "- $db_name (Size: $size)"
+                echo "  Tables: $tables"
+                echo
+                
+                count=$((count + 1))
+            fi
+        done
+        
+        if [[ $count -eq 0 ]]; then
+            echo "No databases found."
+        fi
+    else
+        echo "No databases found."
+    fi
+}
+
+# Initialize a new database
+init_database_cli() {
+    local db_name="$1"
+    
+    log_info "Initializing new database: $db_name"
+    
+    if [[ -f "${DB_DIR}/${db_name}.sqlite" ]]; then
+        read -p "Database already exists. Overwrite? (y/N): " confirm
+        if [[ ! "$confirm" =~ ^[Yy] ]]; then
+            log_info "Database initialization cancelled"
+            return 1
+        fi
+    fi
+    
+    # Select database type
+    echo "Select database type:"
+    echo "1. General Content"
+    echo "2. Media (Images/Videos)"
+    echo "3. Code Repository"
+    echo "4. Research/Papers"
+    echo "5. Custom Schema"
+    
+    read -p "Selection (1-5): " db_type
+    
+    case "$db_type" in
+        1) schema_file="${PROJECT_ROOT}/config/schemas/general.sql" ;;
+        2) schema_file="${PROJECT_ROOT}/config/schemas/media.sql" ;;
+        3) schema_file="${PROJECT_ROOT}/config/schemas/code.sql" ;;
+        4) schema_file="${PROJECT_ROOT}/config/schemas/research.sql" ;;
+        5)
+            read -p "Path to custom schema file: " schema_file
+            if [[ ! -f "$schema_file" ]]; then
+                log_error "Schema file not found: $schema_file"
+                return 1
+            fi
+            ;;
+        *)
+            log_error "Invalid selection"
+            return 1
+            ;;
+    esac
+    
+    # Initialize database with schema
+    init_database "${DB_DIR}/${db_name}.sqlite" "$schema_file"
+    
+    log_info "Database initialized: ${db_name}"
+    echo "Database '${db_name}' initialized successfully."
+}
+
+# Main entry point with workflow orchestration
+main() {
+    setup_environment
+    process_arguments "$@"
+    
+    case "$MODE" in
+        interactive)
+            run_interactive_mode
+            ;;
+        file)
+            process_file "$FILE_PATH" "$DATABASE"
+            ;;
+        batch)
+            # TODO: Implement batch mode
+            log_error "Batch mode not implemented yet"
+            exit 1
+            ;;
+        list-dbs)
+            list_databases
+            ;;
+        init-db)
+            init_database_cli "$DB_NAME"
+            ;;
+    esac
+}
+
+# Start the program
+main "$@"

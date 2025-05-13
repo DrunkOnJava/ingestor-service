@@ -1,0 +1,16 @@
+{
+  "name": "ingestor-system",
+  "version": "0.1.0",
+  "description": "Content ingestion system for SQLite databases with Claude AI integration",
+  "main": "src/mcp/ingestor_mcp_server.js",
+  "scripts": {
+    "start": "node src/mcp/ingestor_mcp_server.js",
+    "start:http": "node src/mcp/ingestor_mcp_server.js --transport http",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "sqlite3": "^5.1.6"
+  }
+}
