@@ -7,8 +7,23 @@ if [[ -z "${PROJECT_ROOT}" ]]; then
     export PROJECT_ROOT
 fi
 
+# Ensure TEST_TEMP_DIR is always defined and created
+setup_test_temp_dir() {
+    TEST_TEMP_DIR=$(mktemp -d -t "ingestor-test-XXXXXX")
+    
+    if [[ ! -d "${TEST_TEMP_DIR}" ]]; then
+        echo "Error: Failed to create temporary directory" >&2
+        return 1
+    fi
+    
+    export TEST_TEMP_DIR
+}
+
 # Setup test environment
 setup_test_environment() {
+    # Create a temporary directory for this test
+    setup_test_temp_dir
+    
     # Load the logging module with mocked functions to prevent actual logging
     function log_debug() { echo "[DEBUG] $*" >/dev/null; }
     function log_info() { echo "[INFO] $*" >/dev/null; }
@@ -38,8 +53,19 @@ teardown_test_environment() {
     unset TEST_MODE
     unset TEST_TEMP_DIR
     
-    # Unset function exports
-    unset -f log_debug log_info log_warning log_error
+    # Unset function exports if they exist
+    if type -t log_debug >/dev/null 2>&1; then
+        unset -f log_debug
+    fi
+    if type -t log_info >/dev/null 2>&1; then
+        unset -f log_info
+    fi
+    if type -t log_warning >/dev/null 2>&1; then
+        unset -f log_warning
+    fi
+    if type -t log_error >/dev/null 2>&1; then
+        unset -f log_error
+    fi
 }
 
 # Source a module with proper environment

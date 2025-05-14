@@ -161,7 +161,7 @@ mock_function() {
 
 # Create a test configuration file
 create_test_config() {
-    cat > "${INGESTOR_HOME}/config/settings.yml" << EOF
+    cat > "${INGESTOR_HOME}/config/settings.yml" << 'EOFCFG'
 # Test Ingestor Configuration
 
 # Claude API Key (test mode)
@@ -211,7 +211,7 @@ claude:
   
   # Maximum retries on failure
   max_retries: 1
-EOF
+EOFCFG
 }
 
 # Create test database

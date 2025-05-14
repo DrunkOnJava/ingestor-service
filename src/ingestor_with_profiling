@@ -1,0 +1,113 @@
+#!/bin/bash
+set -eo pipefail
+
+# ===========================================
+# Ingestor System - Performance Profiling Wrapper
+# 
+# This script wraps the main ingestor script with
+# performance profiling capabilities to identify
+# bottlenecks and measure performance.
+# ===========================================
+
+# Base paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+INGESTOR_HOME="${HOME}/.ingestor"
+PROFILING_LOG_DIR="${INGESTOR_HOME}/logs/profiling"
+
+# Import profiler module
+source "${PROJECT_ROOT}/src/modules/profiler.sh"
+
+# Initialize profiler with profiling enabled
+init_profiler true "${PROFILING_LOG_DIR}"
+
+# Parse command line arguments
+parse_profiling_args() {
+    local args=()
+    local generate_report=false
+    local report_path=""
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --profile-report)
+                generate_report=true
+                if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+                    report_path="$2"
+                    shift
+                fi
+                shift
+                ;;
+            *)
+                args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    
+    # Export the parsed arguments
+    PROFILING_ARGS=("${args[@]}")
+    GENERATE_REPORT="$generate_report"
+    REPORT_PATH="$report_path"
+}
+
+# Main wrapper function
+main() {
+    local start_time=$(date +%s)
+    
+    # Parse arguments
+    parse_profiling_args "$@"
+    
+    # Run the main ingestor script with profiling
+    profile_function "ingestor_main" "${PROJECT_ROOT}/src/ingestor" "${PROFILING_ARGS[@]}"
+    local result=$?
+    
+    # Generate report if requested
+    if [[ "$GENERATE_REPORT" == "true" ]]; then
+        local report_file
+        if [[ -n "$REPORT_PATH" ]]; then
+            report_file=$(generate_profiling_report "$REPORT_PATH")
+        else
+            report_file=$(generate_profiling_report)
+        fi
+        
+        echo "Performance profiling report generated: $report_file"
+    fi
+    
+    # Save benchmark data
+    save_benchmarks
+    
+    local end_time=$(date +%s)
+    local total_time=$((end_time - start_time))
+    
+    echo "Total execution time: ${total_time}s"
+    
+    return $result
+}
+
+# Display additional help information for profiling
+display_profiling_help() {
+    cat << EOF
+
+Performance Profiling Options:
+  --profile-report [PATH]     Generate a performance profiling report
+                             Optional PATH specifies the report file location
+
+Example usage:
+  ingestor_with_profiling --database research --file document.pdf --profile-report
+  ingestor_with_profiling --batch --directory ./docs --database research --profile-report ./my_report.md
+
+EOF
+}
+
+# Check if help is requested
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+    # First, show standard help
+    "${PROJECT_ROOT}/src/ingestor" --help
+    
+    # Then add profiling help
+    display_profiling_help
+    exit 0
+fi
+
+# Run the main wrapper function
+main "$@"

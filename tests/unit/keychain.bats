@@ -9,8 +9,68 @@ setup() {
     # Call the common setup
     setup_test_environment
     
+    # Create a mock error_handling module
+    mkdir -p "${TEST_TEMP_DIR}/src/modules"
+    cat > "${TEST_TEMP_DIR}/src/modules/error_handling.sh" << 'EOF'
+#!/bin/bash
+# Mock error handling module for testing
+
+# Constants for exit code categories
+readonly ERR_GENERAL=1            # General errors
+readonly ERR_CONFIG=10            # Configuration errors (10-19)
+readonly ERR_PERMISSION=20        # Permission errors (20-29)
+readonly ERR_FILE=30              # File operation errors (30-39)
+readonly ERR_NETWORK=40           # Network operation errors (40-49)
+readonly ERR_DATABASE=50          # Database operation errors (50-59)
+readonly ERR_API=60               # API operation errors (60-69)
+readonly ERR_DEPENDENCY=70        # Missing dependency errors (70-79)
+readonly ERR_VALIDATION=80        # Input validation errors (80-89)
+readonly ERR_TIMEOUT=90           # Timeout errors (90-99)
+
+# Mock validation function
+require_variable() {
+    local var_name="$1"
+    local var_value="$2"
+    local error_message="${3:-Required variable $var_name is empty}"
+    
+    if [[ -z "$var_value" ]]; then
+        log_debug "$error_message"
+        return $ERR_VALIDATION
+    fi
+    
+    return 0
+}
+
+# Mock retry function
+retry_command() {
+    local cmd="$1"
+    eval "$cmd"
+    return $?
+}
+
+# Mock error description function
+get_error_description() {
+    local error_code="$1"
+    echo "Error code $error_code description"
+}
+
+# Mock log_exception function needed by handle_critical_error
+log_exception() {
+    local message="$1"
+    local exit_code="${2:-$ERR_GENERAL}"
+    log_debug "EXCEPTION: $message (code: $exit_code)"
+}
+
+ERROR_HANDLING_LOADED=1
+EOF
+
+    # Set PROJECT_ROOT to TEST_TEMP_DIR for this test
+    export PROJECT_ROOT="${TEST_TEMP_DIR}"
+    
     # Source the keychain module
-    source_module "${PROJECT_ROOT}/src/modules/keychain.sh"
+    cp -f "/Users/griffin/Projects/ingestor-system/src/modules/keychain.sh" "${TEST_TEMP_DIR}/src/modules/"
+    source "${TEST_TEMP_DIR}/src/modules/error_handling.sh"
+    source "${TEST_TEMP_DIR}/src/modules/keychain.sh"
 }
 
 # Teardown - runs after each test

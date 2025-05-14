@@ -850,10 +850,11 @@ EOF
     
     # Create a large file for chunking tests
     local large_text="This is a very large file content for testing chunking functionality.\n"
-    for i in {1..100}; do
+    # Limit the iterations to prevent potential out-of-memory issues
+    for i in {1..10}; do
         large_text="${large_text}${large_text}"
     done
-    echo "$large_text" > "$TEMP_DIR/large_sample.txt"
+    echo -e "$large_text" > "$TEMP_DIR/large_sample.txt"
 }
 
 # Test content type detection

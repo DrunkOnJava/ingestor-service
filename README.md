@@ -1,31 +1,33 @@
 # Ingestor System
 
-A flexible content ingestion system for SQLite databases that processes various content types using Claude AI to extract meaningful data.
+A modular TypeScript system for content ingestion, entity extraction, and database storage with Claude AI integration.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
-The Ingestor System is designed to accept various content types (text, images, videos, code files) and intelligently process them to extract relevant data and metadata for storage in specialized SQLite databases. It uses Claude's AI capabilities for content analysis and supports both interactive terminal input and file-based processing.
+The Ingestor System processes various content types (text, PDFs, code, images, etc.), extracts named entities, and stores them in SQLite databases for later retrieval and analysis. It includes a Model Context Protocol (MCP) server for seamless integration with Claude.
 
 The system is designed to be modular, with separate components for content detection, processing, database management, and Claude AI integration. It provides a seamless way to analyze and store content of different types with minimal configuration.
 
 ## Features
 
-- Simple command-line interface with "ingestor" command
-- Support for multiple content types (text, images, videos, documents, code)
-- Intelligent processing and extraction using Claude AI
-- Chunked processing for handling large inputs
-- Configurable database profiles for specialized data interests
-- Interactive terminal mode and file-based processing
+- **Content Processing**: Analyze text, code, PDFs, images, and more
+- **Entity Extraction**: Extract people, organizations, dates, and other entities
+- **Content Chunking**: Efficiently process large files
+- **SQLite Storage**: Store content and entities with optimized indexes
+- **Full-Text Search**: Search across all content and entities
+- **Claude AI Integration**: Use Claude for enhanced entity recognition
+- **MCP Server**: Claude Model Context Protocol implementation
+- **TypeScript Architecture**: Modular design with strong typing
 
 ## Installation
 
 ### Prerequisites
 
-- Bash 4.0+ or compatible shell
+- Node.js 16+ for TypeScript execution
 - SQLite 3.35.0+ for database operations
-- cURL or wget for network operations
-- jq for JSON processing
-- A Claude API key for content analysis
+- Optional: Claude API key for enhanced entity extraction
 
 ### Steps
 
@@ -34,343 +36,266 @@ The system is designed to be modular, with separate components for content detec
 git clone https://github.com/yourusername/ingestor-system.git
 cd ingestor-system
 
-# Install dependencies (including BATS for testing)
-./scripts/install_dependencies.sh
+# Install dependencies
+npm install
 
-# Set up environment and configuration
-./scripts/setup.sh
+# Build the project
+npm run build
 
-# Configure your Claude API key (uses macOS Keychain or manual entry)
-./scripts/configure_api_key.sh
+# Set up environment
+cp .env.example .env
+# Edit .env to add your Claude API key
 ```
 
-The installation script will:
-1. Check and install required dependencies
-2. Set up the directory structure in `~/.ingestor/`
-3. Create default configuration files
-4. Set up database schemas
-5. Configure the MCP server (for Claude Code integration)
+The built system will:
+1. Create the necessary directory structure in `~/.ingestor/`
+2. Set up database schemas automatically
+3. Configure logging and temporary directories
 
 ## Usage
 
-### Basic Operations
+### MCP Server
+
+Start the MCP server for Claude integration:
 
 ```bash
-# Interactive mode
-ingestor --database my_database
+# Start with stdio transport (for Claude CLI)
+npm run mcp
 
-# Process a file
-ingestor --file path/to/file.txt --database my_database
-
-# Batch processing
-ingestor --batch --directory path/to/files --database my_database
-
-# List available databases
-ingestor --list-dbs
-
-# Initialize a new database
-ingestor --init-db new_database
+# Start with HTTP transport (for other clients)
+npm run mcp:http --port 3000
 ```
 
-### Advanced Options
+### TypeScript API
 
-```bash
-# Specify chunking strategy (size, paragraph, or sentence)
-ingestor --file large_document.txt --chunk-strategy paragraph
+```typescript
+import { EntityManager, ContentProcessor, DatabaseService } from './core';
 
-# Set maximum chunk size (in bytes for size strategy)
-ingestor --file large_document.txt --max-chunk-size 8192
+// Create components
+const logger = new Logger('myapp');
+const dbService = new DatabaseService(logger);
+const entityManager = new EntityManager(logger, dbService);
+const contentProcessor = new ContentProcessor(logger, fs, claudeService, entityManager);
 
-# Process with specific Claude model
-ingestor --file code.py --model claude-3-opus-20240229
+// Process content
+const result = await contentProcessor.processContent(
+  'path/to/content.txt',
+  'text/plain'
+);
 
-# Extract specific entities
-ingestor --file article.txt --extract people,organizations,dates
-
-# Control verbosity
-ingestor --file document.txt --verbose
-ingestor --file document.txt --quiet
-
-# Export processed content
-ingestor --database my_database --export json --output exported_data.json
+// Extract entities
+const entityResult = await entityManager.extractEntities(
+  'This is a text containing Apple Inc. and Tim Cook.',
+  'text/plain'
+);
 ```
 
-### Using as MCP Server with Claude Code
+### Content Processing
 
-```bash
-# Start MCP server (stdio transport)
-./scripts/start_mcp_server.sh
+The system supports various content types:
 
-# Start MCP server (HTTP transport on port 8080)
-./scripts/start_mcp_server.sh --http --port 8080
+- Text (plain text, markdown, HTML)
+- Documents (PDF, Word)
+- Code (multiple programming languages)
+- Images (with text extraction)
+- Videos (metadata extraction)
 
-# Use with Claude CLI
-claude --mcp ingestor
-```
+Content can be chunked for efficient processing of large files using different strategies:
+- Character-based chunking
+- Line-based chunking
+- Paragraph-based chunking
+- Token-based chunking
 
-## Project Structure
+## Architecture
+
+The system follows a modular architecture with clear separation of concerns:
 
 ```
 ingestor-system/
 ├── config/               # Configuration files
-│   ├── schemas/          # Database schemas
-│   └── defaults/         # Default configuration templates
-├── docs/                 # Documentation
-│   ├── api/              # API documentation
-│   ├── examples/         # Example usage scenarios
-│   └── images/           # Documentation images
-├── lib/                  # Shared libraries
-├── scripts/              # Utility scripts
-│   ├── install_dependencies.sh  # Install required dependencies
-│   ├── setup.sh          # Set up the environment
-│   ├── configure_api_key.sh     # Configure Claude API key
-│   ├── run_tests.sh      # Run the test suite
-│   ├── lint.sh           # Check code style
-│   ├── start_mcp_server.sh      # Start MCP server
-│   └── setup_mcp_server.sh      # Configure MCP server
+│   └── schemas/          # Database schema SQL files
 ├── src/                  # Source code
-│   ├── modules/          # Core modules
-│   │   ├── config.sh     # Configuration management
-│   │   ├── content.sh    # Content detection and processing
-│   │   ├── database.sh   # Database operations
-│   │   ├── keychain.sh   # API key management
-│   │   └── logging.sh    # Logging functionality
-│   ├── processors/       # Content type processors
-│   │   ├── text.sh       # Text processor
-│   │   ├── image.sh      # Image processor
-│   │   ├── video.sh      # Video processor
-│   │   ├── document.sh   # Document processor
-│   │   └── code.sh       # Code processor
-│   ├── mcp/              # Model Context Protocol integration
-│   │   └── ingestor_mcp_server.js  # MCP server implementation
-│   ├── claude/           # Claude integration
-│   │   ├── api.sh        # Claude API client
-│   │   └── prompts/      # System prompts for content types
-│   └── ingestor          # Main executable
-└── tests/                # Test suite
-    ├── unit/             # Unit tests
-    │   ├── config.bats   # Tests for config module
-    │   ├── content.bats  # Tests for content module
-    │   ├── database.bats # Tests for database module
-    │   └── keychain.bats # Tests for keychain module
-    ├── integration/      # Integration tests
-    │   └── ingestor_basic.bats  # Basic end-to-end tests
-    ├── fixtures/         # Test fixtures (sample files)
-    ├── test_helper.bash  # Test helpers and utilities
-    └── assertions.bash   # Custom assertion functions
+│   ├── core/             # Core functionality
+│   │   ├── entity/       # Entity extraction
+│   │   │   ├── types/    # Entity type definitions
+│   │   │   ├── extractors/ # Content-specific extractors
+│   │   │   └── utils/    # Entity utilities
+│   │   ├── content/      # Content processing
+│   │   ├── database/     # Database management
+│   │   ├── logging/      # Logging functionality
+│   │   ├── services/     # Service interfaces
+│   │   └── utils/        # Utility functions
+│   ├── api/              # External interfaces
+│   │   └── mcp/          # MCP server implementation
+│   └── index.ts          # Main entry point
+├── tests/                # Test suite
+│   ├── unit/             # Unit tests
+│   ├── integration/      # Integration tests
+│   └── fixtures/         # Test fixtures
+├── dist/                 # Compiled output
+├── scripts/              # Utility scripts
+├── package.json          # NPM package definition
+└── tsconfig.json         # TypeScript configuration
 ```
 
-## Configuration
+## Database Schema
 
-The system uses a hierarchical configuration structure:
+The system uses SQLite with a modular schema:
 
-### System Configuration
+### Entity Tables
 
-The global configuration is stored in `~/.ingestor/config/settings.yml` and includes:
+```sql
+-- Entities table
+CREATE TABLE IF NOT EXISTS entities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  description TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
-```yaml
-# Claude API Key (or use KEYCHAIN to retrieve from system keychain)
-claude_api_key: KEYCHAIN
-
-# Default database to use if none specified
-default_database: general
-
-# Log level (debug, info, warning, error)
-log_level: info
-
-# Content processing settings
-content:
-  # Maximum file size in bytes for direct processing
-  max_file_size: 10485760 # 10MB
-  
-  # Chunk size for large files
-  chunk_size: 524288 # 512KB
-  
-  # Temporary file handling
-  keep_temp_files: false
-
-# Database settings
-database:
-  # Directory for database files relative to ~/.ingestor
-  directory: databases
-  
-  # Whether to compress databases automatically
-  auto_vacuum: true
-  
-  # Journal mode for databases
-  journal_mode: WAL
-
-# Claude integration settings
-claude:
-  # Model to use
-  model: claude-3-opus-20240229
-  
-  # Maximum tokens per request
-  max_tokens: 4096
-  
-  # Temperature for generation
-  temperature: 0.7
-  
-  # Request timeout in seconds
-  timeout: 60
-  
-  # Maximum retries on failure
-  max_retries: 3
+-- Content-entity relationships
+CREATE TABLE IF NOT EXISTS content_entities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_id INTEGER NOT NULL,
+  content_type TEXT NOT NULL,
+  entity_id INTEGER NOT NULL,
+  relevance REAL DEFAULT 0.5,
+  context TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE
+);
 ```
 
-### Database Profiles
+### Content Tables
 
-Database profiles (stored in `~/.ingestor/config/databases/`) define how content is processed for specific databases:
+```sql
+-- Content metadata
+CREATE TABLE IF NOT EXISTS content (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_type TEXT NOT NULL,
+  title TEXT,
+  description TEXT,
+  source TEXT,
+  file_path TEXT,
+  hash TEXT,
+  size INTEGER,
+  metadata TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
-```yaml
-# Example database profile: research.yml
-name: Research Database
-description: Specialized database for research papers and academic content
-
-# Content types to process
-content_types:
-  - text/plain
-  - application/pdf
-  - application/msword
-  
-# Extraction focus
-extraction:
-  # General topics of interest
-  topics:
-    - research methodology
-    - scientific findings
-    - academic citations
-  
-  # Entities to extract
-  entities:
-    - authors
-    - institutions
-    - dates
-    - citations
-  
-  # Metadata to extract
-  metadata:
-    - title
-    - abstract
-    - publication_date
-    - keywords
+-- Content chunks for large content
+CREATE TABLE IF NOT EXISTS content_chunks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_id INTEGER NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  chunk_text TEXT,
+  chunk_metadata TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (content_id) REFERENCES content(id) ON DELETE CASCADE
+);
 ```
 
-### MCP Server Configuration
+### Full-Text Search
 
-For Claude Code integration, configure the MCP server using the setup script:
+```sql
+-- Full-text search for content
+CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(
+  title, 
+  description, 
+  content,
+  content='content_chunks',
+  content_rowid='id'
+);
 
-```bash
-./scripts/setup_mcp_server.sh
-```
-
-This creates a configuration for the Claude CLI:
-
-```json
-{
-  "name": "ingestor",
-  "command": "/path/to/ingestor-system/scripts/start_mcp_server.sh",
-  "env": {
-    "INGESTOR_MCP_MODE": "true",
-    "INGESTOR_CONFIG_DIR": "~/.ingestor/config"
-  },
-  "transport": "stdio",
-  "description": "Content ingestion system for Claude integration"
-}
-```
+-- Entity full-text search
+CREATE VIRTUAL TABLE IF NOT EXISTS entity_fts USING fts5(
+  name,
+  type,
+  description,
+  content='entities',
+  content_rowid='id'
+);
 
 ## Development
 
-### Running Tests
+### Development Workflow
 
-The project uses BATS (Bash Automated Testing System) for testing:
+```bash
+# Install dependencies
+npm install
+
+# Run in development mode
+npm run dev
+
+# Start MCP server in development mode
+npm run mcp
+
+# Run linting
+npm run lint
+
+# Run tests
+npm run test
+```
+
+### Testing
+
+The project uses Jest for testing TypeScript code:
 
 ```bash
 # Run all tests
-./scripts/run_tests.sh
+npm test
 
-# Run only unit tests
-./scripts/run_tests.sh --unit
+# Run with coverage
+npm test -- --coverage
 
-# Run only integration tests
-./scripts/run_tests.sh --int
-
-# Run specific module tests
-./scripts/run_tests.sh keychain
-./scripts/run_tests.sh content
-
-# Run tests with verbose output
-./scripts/run_tests.sh --verbose
+# Run specific tests
+npm test -- --testPathPattern=entity
 ```
 
-### Code Style
+### Extending the System
 
-The project follows shell script best practices:
+#### Adding a New Entity Extractor
 
-```bash
-# Check code style
-./scripts/lint.sh
+1. Create a new class in `src/core/entity/extractors` that extends `EntityExtractor`
+2. Implement the `extract` method for your specific content type
+3. Register your extractor in `EntityManager.initializeExtractors()`
 
-# Auto-fix linting issues where possible
-./scripts/lint.sh --fix
+```typescript
+// Example: Create a new PDF entity extractor
+import { EntityExtractor } from '../EntityExtractor';
+
+export class PdfEntityExtractor extends EntityExtractor {
+  public async extract(content: string, contentType: string, options?: EntityExtractionOptions): Promise<EntityExtractionResult> {
+    // PDF-specific extraction logic here
+    // ...
+    return {
+      entities: extractedEntities,
+      success: true
+    };
+  }
+}
 ```
 
-### Building Documentation
+#### Adding a New MCP Tool
 
-Documentation is generated using Markdown and converted to HTML/PDF:
-
-```bash
-# Build all documentation
-./scripts/build_docs.sh
-
-# Build specific sections
-./scripts/build_docs.sh --section api
-./scripts/build_docs.sh --section examples
-```
+1. Define your tool in `src/api/mcp/IngestorMcpServer.ts`
+2. Implement the handler method
+3. Add the tool to the routing logic in `handleToolRequest()`
 
 ### Contributing
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
-4. Run tests and linting (`./scripts/run_tests.sh && ./scripts/lint.sh`)
+4. Run tests and linting (`npm test && npm run lint`)
 5. Commit your changes (`git commit -m 'Add amazing feature'`)
 6. Push to the branch (`git push origin feature/amazing-feature`)
 7. Open a Pull Request
-
-## System Architecture
-
-### Core Components
-
-1. **Config Module**
-   - Manages configuration loading/saving
-   - Handles default configuration creation
-   - Provides profile management for databases
-
-2. **Content Module**
-   - Detects content types
-   - Manages content chunking strategies
-   - Routes content to appropriate processors
-
-3. **Database Module**
-   - Handles SQLite database operations
-   - Creates and upgrades database schemas
-   - Provides query utilities for content retrieval
-
-4. **Keychain Module**
-   - Securely manages API keys
-   - Integrates with system keychain (macOS/Linux)
-   - Provides fallback for environments without keychain
-
-5. **Claude Integration**
-   - Handles API communication with Claude
-   - Manages prompts for different content types
-   - Processes and formats Claude responses
-
-6. **MCP Server**
-   - Implements Model Context Protocol
-   - Provides tools for Claude Code integration
-   - Supports both stdio and HTTP transport
 
 ## License
 

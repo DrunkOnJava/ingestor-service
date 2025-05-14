@@ -2,74 +2,290 @@
 # Database management module for ingestor-system
 # Enhanced with robust error handling
 
-# Source error handler if not already loaded
-if ! type require_dependency &>/dev/null; then
-    # Locate the error_handler.sh module
-    if [[ -f "${BASH_SOURCE%/*}/error_handler.sh" ]]; then
-        source "${BASH_SOURCE%/*}/error_handler.sh"
-        init_error_handler
+# Source enhanced error handler if not already loaded
+if ! type init_enhanced_error_handler &>/dev/null; then
+    # Locate the enhanced_error_handler.sh module
+    if [[ -f "${BASH_SOURCE%/*}/enhanced_error_handler.sh" ]]; then
+        source "${BASH_SOURCE%/*}/enhanced_error_handler.sh"
+        init_enhanced_error_handler
     else
-        echo "Error: error_handler.sh module not found" >&2
-        exit 1
+        # Fall back to standard error handler
+        if [[ -f "${BASH_SOURCE%/*}/error_handler.sh" ]]; then
+            source "${BASH_SOURCE%/*}/error_handler.sh"
+            init_error_handler
+            echo "Warning: Using standard error handler instead of enhanced version" >&2
+        else
+            echo "Error: No error handler module found" >&2
+            exit 1
+        fi
     fi
 fi
 
+# Import error codes if not already imported
+if [[ -z "${ERR_UNKNOWN+x}" && -f "${BASH_SOURCE%/*}/error_codes.sh" ]]; then
+    source "${BASH_SOURCE%/*}/error_codes.sh"
+fi
+
 # Check for required dependencies
-require_dependency "sqlite3" "SQLite3 command-line tool is required for database operations"
+if type require_dependency &>/dev/null; then
+    require_dependency "sqlite3" "SQLite3 command-line tool is required for database operations"
+else
+    # Fallback if require_dependency is not available
+    if ! command -v sqlite3 &>/dev/null; then
+        log_error "SQLite3 command-line tool is required for database operations"
+        exit $ERR_DEPENDENCY
+    fi
+fi
+
+# Initialize database module
+init_database_module() {
+    # Set optional configuration parameters
+    DB_RETRY_COUNT=${DB_RETRY_COUNT:-5}            # Higher retry count for database operations
+    DB_RETRY_DELAY=${DB_RETRY_DELAY:-1}           # Start with shorter delay but use exponential backoff
+    DB_OPERATION_TIMEOUT=${DB_OPERATION_TIMEOUT:-30}  # Default timeout for database operations
+    DB_TRANSACTION_ISOLATION=${DB_TRANSACTION_ISOLATION:-"IMMEDIATE"}  # Default transaction isolation level
+    DB_AUTO_BACKUP=${DB_AUTO_BACKUP:-true}       # Whether to auto-backup before risky operations
+    DB_MAX_FAILURES=${DB_MAX_FAILURES:-3}        # Maximum allowed failures before halting operations
+    
+    log_debug "Database module initialized with retry count: $DB_RETRY_COUNT, retry delay: $DB_RETRY_DELAY"
+    
+    # Track database failures for adaptive error handling
+    DB_FAILURE_COUNT=0
+}
 
 # Initialize database with schema
 init_database() {
     local db_path="$1"
     local schema_file="$2"
+    local force_recreate="${3:-false}"
+    local apply_optimizations="${4:-true}"
     
-    # Validate inputs
-    validate_inputs "init_database" "db_path" "schema_file"
+    # Validate required inputs
+    if [[ -z "$db_path" || -z "$schema_file" ]]; then
+        log_error "Database path and schema file are required for initialization"
+        document_error $ERR_INVALID_ARG "init_database" "Missing required parameters"
+        return $ERR_INVALID_ARG
+    fi
     
     log_info "Initializing database at: $db_path with schema: $schema_file"
     
     # Ensure the database directory exists
     local db_dir
     db_dir=$(dirname "$db_path")
-    require_directory "$db_dir" "Database directory not found: $db_dir" true
     
-    # Verify schema file exists
-    require_file "$schema_file" "Schema file not found: $schema_file"
+    # Create directory with enhanced error checking
+    if [[ ! -d "$db_dir" ]]; then
+        log_info "Creating database directory: $db_dir"
+        if ! mkdir -p "$db_dir" 2>/dev/null; then
+            log_error "Failed to create database directory: $db_dir"
+            document_error $ERR_DIR_UNWRITABLE "init_database" "Cannot create database directory: $db_dir"
+            return $ERR_DIR_UNWRITABLE
+        fi
+    elif [[ ! -w "$db_dir" ]]; then
+        log_error "Database directory is not writable: $db_dir"
+        document_error $ERR_DIR_UNWRITABLE "init_database" "Cannot write to database directory: $db_dir"
+        return $ERR_DIR_UNWRITABLE
+    fi
     
-    # Initialize database with schema
+    # Verify schema file exists with enhanced checking
+    if [[ ! -f "$schema_file" ]]; then
+        log_error "Schema file not found: $schema_file"
+        document_error $ERR_FILE_NOT_FOUND "init_database" "Schema file not found: $schema_file"
+        return $ERR_FILE_NOT_FOUND
+    elif [[ ! -r "$schema_file" ]]; then
+        log_error "Schema file is not readable: $schema_file"
+        document_error $ERR_FILE_UNREADABLE "init_database" "Cannot read schema file: $schema_file"
+        return $ERR_FILE_UNREADABLE
+    fi
+    
+    # Check if database already exists and force_recreate is false
+    if [[ -f "$db_path" && "$force_recreate" != "true" ]]; then
+        # Check database integrity
+        if sqlite3 "$db_path" "PRAGMA integrity_check;" &>/dev/null; then
+            log_info "Database already exists and passed integrity check: $db_path"
+            
+            # Apply entity index optimizations if enabled
+            if [[ "$apply_optimizations" == "true" ]]; then
+                # Check if we have entities table
+                local has_entities
+                has_entities=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='entities';" 2>/dev/null || echo "0")
+                
+                if [[ "$has_entities" -gt "0" ]]; then
+                    log_debug "Database has entities table, applying optimizations"
+                    # Get the database name from path
+                    local db_name
+                    db_name=$(basename "$db_path" .sqlite)
+                    # Apply entity optimizations
+                    optimize_entity_indexes "$db_name" >/dev/null || log_warning "Failed to apply entity optimizations to existing database"
+                fi
+            fi
+            
+            return 0
+        else
+            log_warning "Database exists but failed integrity check: $db_path"
+            # Continue to recreate the database
+        fi
+    fi
+    
+    # Backup existing database if it exists and we're recreating it
+    if [[ -f "$db_path" && "$force_recreate" == "true" ]]; then
+        local backup_path="${db_path}.backup_$(date +%Y%m%d_%H%M%S)"
+        log_info "Backing up existing database to: $backup_path"
+        if ! cp "$db_path" "$backup_path" 2>/dev/null; then
+            log_warning "Failed to backup existing database"
+        fi
+    fi
+    
+    # Initialize database with schema using enhanced error handling and retry
     log_info "Applying schema from $schema_file to database at $db_path"
     
-    # Use safe_db_query from error_handler.sh
-    if safe_db_query "$db_path" ".read $schema_file" > /dev/null; then
-        log_info "Database initialized successfully"
-        return 0
+    # Track if initialization was successful
+    local init_success=false
+    
+    # We'll use try-catch for better error handling if available
+    if type try &>/dev/null; then
+        try safe_sql_query "$db_path" ".read $schema_file"
+        
+        catch handle_db_init_error "$db_path" "$schema_file"
+        
+        if [[ ${_ENHANCED_ERROR_HANDLER_CODE:-0} -eq 0 ]]; then
+            log_info "Database initialized successfully"
+            init_success=true
+        else
+            return ${_ENHANCED_ERROR_HANDLER_CODE}
+        fi
     else
-        raise_error "Failed to initialize database with schema: $schema_file" $ERR_DATABASE
-        return $ERR_DATABASE
+        # Fallback to traditional error handling with retry
+        if type retry_function &>/dev/null; then
+            if retry_function safe_sql_query "$db_path" ".read $schema_file" "$DB_RETRY_COUNT" "$DB_RETRY_DELAY"; then
+                log_info "Database initialized successfully"
+                init_success=true
+            else
+                local exit_code=$?
+                log_error "Failed to initialize database with schema after $DB_RETRY_COUNT attempts: $schema_file"
+                document_error $exit_code "init_database" "Failed to apply schema after multiple attempts"
+                return $exit_code
+            fi
+        else
+            # Basic fallback if enhanced functions aren't available
+            if sqlite3 "$db_path" ".read $schema_file" 2>/dev/null; then
+                log_info "Database initialized successfully"
+                init_success=true
+            else
+                log_error "Failed to initialize database with schema: $schema_file"
+                return $ERR_DATABASE
+            fi
+        fi
     fi
+    
+    # If initialization was successful and optimizations are enabled, apply entity indexing
+    if [[ "$init_success" == "true" && "$apply_optimizations" == "true" ]]; then
+        # Check if entities table was created
+        local has_entities
+        has_entities=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='entities';" 2>/dev/null || echo "0")
+        
+        if [[ "$has_entities" -gt "0" ]]; then
+            log_debug "Database has entities table, applying optimizations"
+            # Get the database name from path
+            local db_name
+            db_name=$(basename "$db_path" .sqlite)
+            # Apply entity optimizations
+            optimize_entity_indexes "$db_name" >/dev/null || log_warning "Failed to apply entity optimizations to new database"
+        fi
+    fi
+    
+    # Creation of maintenance log table
+    create_maintenance_log_if_needed "$db_path"
+    
+    return 0
+}
+
+# Error handler for database initialization
+handle_db_init_error() {
+    local db_path="$1"
+    local schema_file="$2"
+    local error_code="$3"
+    local line="$4"
+    local func="$5"
+    local file="$6"
+    
+    log_error "Database initialization failed with error $error_code at $file:$line ($func)"
+    
+    # Check for specific errors and provide targeted recovery advice
+    case $error_code in
+        $ERR_DB_LOCKED)
+            log_error "Database is locked. Please ensure no other processes are using it and try again."
+            ;;
+        $ERR_DB_CORRUPT)
+            log_error "Database appears to be corrupt. If you have a backup, restore it or recreate the database."
+            ;;
+        $ERR_DB_SCHEMA)
+            log_error "Schema error. The schema file may contain syntax errors: $schema_file"
+            ;;
+        *)
+            log_error "A database error occurred. Check permissions and disk space."
+            ;;
+    esac
+    
+    document_error $error_code "init_database" "Failed to initialize database: $db_path with schema: $schema_file"
+    return $error_code
 }
 
 # Check if database exists and is properly initialized
 database_exists() {
     local db_name="$1"
+    local run_integrity_check="${2:-true}"
     
-    # Validate inputs
-    validate_inputs "database_exists" "db_name"
+    # Validate required inputs with enhanced validation
+    if [[ -z "$db_name" ]]; then
+        log_error "Database name is required for database_exists"
+        return $ERR_INVALID_ARG
+    fi
+    
+    # Check if DB_DIR is set
+    if [[ -z "${DB_DIR+x}" ]]; then
+        log_error "DB_DIR environment variable is not set"
+        document_error $ERR_ENVIRONMENT "database_exists" "DB_DIR environment variable is not set"
+        return $ERR_ENVIRONMENT
+    fi
     
     local db_path="${DB_DIR}/${db_name}.sqlite"
     
-    # Check if file exists
+    # Check if file exists with enhanced error details
     if [[ ! -f "$db_path" ]]; then
         log_debug "Database file does not exist: $db_path"
         return 1
     fi
     
-    # Also check if the database is valid by running a simple query
-    if safe_db_query "$db_path" "PRAGMA integrity_check;" &>/dev/null; then
-        log_debug "Database integrity check passed: $db_path"
+    # Skip integrity check if not requested (for performance)
+    if [[ "$run_integrity_check" != "true" ]]; then
+        log_debug "Database file exists (integrity check skipped): $db_path"
         return 0
+    fi
+    
+    # Run integrity check with enhanced timeout and retry
+    if type run_with_timeout &>/dev/null; then
+        if run_with_timeout "sqlite3 '$db_path' 'PRAGMA integrity_check;'" 10 "Database integrity check timed out"; then
+            log_debug "Database integrity check passed: $db_path"
+            return 0
+        else
+            local exit_code=$?
+            if [[ $exit_code -eq $ERR_TIMEOUT ]]; then
+                log_warning "Database integrity check timed out: $db_path"
+            else
+                log_warning "Database exists but failed integrity check: $db_path"
+            fi
+            return 1
+        fi
     else
-        log_warning "Database exists but failed integrity check: $db_path"
-        return 1
+        # Fallback to simpler check without timeout
+        if sqlite3 "$db_path" "PRAGMA integrity_check;" &>/dev/null; then
+            log_debug "Database integrity check passed: $db_path"
+            return 0
+        else
+            log_warning "Database exists but failed integrity check: $db_path"
+            return 1
+        fi
     fi
 }
 
@@ -663,35 +879,132 @@ run_custom_query() {
     return 0
 }
 
-# Create a database backup
+# Create a database backup with enhanced resilience
 backup_database() {
     local db_name="$1"
     local backup_dir="${2:-${DB_DIR}/backups}"
+    local verify_backup="${3:-true}"
     
-    # Validate inputs
-    validate_inputs "backup_database" "db_name"
+    # Validate inputs with enhanced error details
+    if [[ -z "$db_name" ]]; then
+        log_error "Database name is required for backup operation"
+        document_error $ERR_INVALID_ARG "backup_database" "Missing required database name parameter"
+        return $ERR_INVALID_ARG
+    fi
     
+    # Get database path
     local db_path
     db_path=$(get_database_path "$db_name")
     
-    # Check if database exists
-    require_file "$db_path" "Database file not found: $db_path"
+    # Check if database exists with enhanced error details
+    if [[ ! -f "$db_path" ]]; then
+        log_error "Database file not found: $db_path"
+        document_error $ERR_FILE_NOT_FOUND "backup_database" "Database file not found: $db_path"
+        return $ERR_FILE_NOT_FOUND
+    fi
     
-    # Create backup directory if it doesn't exist
-    require_directory "$backup_dir" "Backup directory not found: $backup_dir" true
+    # Check database readability
+    if [[ ! -r "$db_path" ]]; then
+        log_error "Database file not readable: $db_path"
+        document_error $ERR_FILE_UNREADABLE "backup_database" "Database file not readable: $db_path"
+        return $ERR_FILE_UNREADABLE
+    fi
     
-    # Create backup filename with timestamp
+    # Perform system resource check before backup
+    if type check_system_resources &>/dev/null; then
+        # Check for at least twice the database size in free space
+        local db_size
+        db_size=$(stat -f%z "$db_path" 2>/dev/null || echo "0")
+        local required_space=$((db_size / 1024 / 1024 * 2 + 50)) # DB size * 2 + 50MB buffer, converted to MB
+        
+        if ! check_system_resources "$required_space" "100"; then
+            log_error "Insufficient disk space for database backup"
+            document_error $ERR_DISK_SPACE "backup_database" "Insufficient disk space for database backup (need ${required_space}MB)"
+            return $ERR_DISK_SPACE
+        fi
+    fi
+    
+    # Create backup directory with enhanced error handling
+    if [[ ! -d "$backup_dir" ]]; then
+        log_info "Creating backup directory: $backup_dir"
+        if ! mkdir -p "$backup_dir" 2>/dev/null; then
+            log_error "Failed to create backup directory: $backup_dir"
+            document_error $ERR_DIR_UNWRITABLE "backup_database" "Cannot create backup directory: $backup_dir"
+            return $ERR_DIR_UNWRITABLE
+        fi
+    elif [[ ! -w "$backup_dir" ]]; then
+        log_error "Backup directory is not writable: $backup_dir"
+        document_error $ERR_DIR_UNWRITABLE "backup_database" "Backup directory is not writable: $backup_dir"
+        return $ERR_DIR_UNWRITABLE
+    fi
+    
+    # Create backup filename with timestamp and random suffix for uniqueness
     local timestamp=$(date +"%Y%m%d_%H%M%S")
-    local backup_file="${backup_dir}/${db_name}_backup_${timestamp}.sqlite"
+    local random_suffix=$(hexdump -n 2 -e '/2 "%04x"' /dev/urandom 2>/dev/null || echo "0000")
+    local backup_file="${backup_dir}/${db_name}_backup_${timestamp}_${random_suffix}.sqlite"
     
     log_info "Creating database backup: $backup_file"
     
-    # Use sqlite3 to create a backup
-    if safe_db_query "$db_path" ".backup '$backup_file'" > /dev/null; then
-        log_info "Database backup created successfully: $backup_file"
+    # Acquire a lock to prevent concurrent backups if possible
+    local lock_acquired=0
+    if type acquire_lock &>/dev/null; then
+        if acquire_lock "/tmp/db_backup_${db_name}.lock" 30; then
+            lock_acquired=1
+        else
+            log_warning "Could not acquire backup lock, proceeding anyway but backup may conflict with other operations"
+        fi
+    fi
+    
+    # Use enhanced retry mechanism for backup
+    local result=0
+    if type retry_with_backoff &>/dev/null; then
+        retry_with_backoff "sqlite3 '$db_path' '.backup $backup_file'" 3 2 10 60 > /dev/null
+        result=$?
+    else
+        # Fallback to basic backup command
+        sqlite3 "$db_path" ".backup '$backup_file'" > /dev/null 2>&1
+        result=$?
+    fi
+    
+    # Release the lock if acquired
+    if [[ $lock_acquired -eq 1 ]] && type release_lock &>/dev/null; then
+        release_lock "/tmp/db_backup_${db_name}.lock"
+    fi
+    
+    # Check backup result
+    if [[ $result -eq 0 ]]; then
+        # Verify backup integrity if requested
+        if [[ "$verify_backup" == "true" ]]; then
+            log_debug "Verifying backup integrity"
+            if sqlite3 "$backup_file" "PRAGMA integrity_check;" &>/dev/null; then
+                log_info "Database backup created and verified successfully: $backup_file"
+            else
+                log_error "Backup verification failed for: $backup_file"
+                document_error $ERR_DB_CORRUPT "backup_database" "Backup verification failed for: $backup_file"
+                rm -f "$backup_file" # Remove corrupt backup
+                return $ERR_DB_CORRUPT
+            fi
+        } else {
+            log_info "Database backup created successfully: $backup_file"
+        }
+        
+        # Maintain backup rotation - keep only the last 5 backups per database
+        if [[ -d "$backup_dir" ]]; then
+            local backup_count
+            backup_count=$(find "$backup_dir" -name "${db_name}_backup_*.sqlite" | wc -l)
+            
+            if [[ "$backup_count" -gt 5 ]]; then
+                log_debug "Removing old backups to maintain rotation limit"
+                find "$backup_dir" -name "${db_name}_backup_*.sqlite" | sort | head -n -5 | xargs rm -f 2>/dev/null || true
+            fi
+        fi
+        
+        # Return the backup file path for reference
+        echo "$backup_file"
         return 0
     else
-        raise_error "Failed to create database backup" $ERR_DATABASE
+        log_error "Failed to create database backup (error: $result)"
+        document_error $ERR_DATABASE "backup_database" "Failed to create database backup: $db_path"
         return $ERR_DATABASE
     fi
 }
@@ -785,4 +1098,107 @@ get_database_stats() {
     
     # Use run_custom_query to execute with error handling
     run_custom_query "$db_name" "$query"
+}
+
+# Apply entity indexing optimizations to a database
+optimize_entity_indexes() {
+    local db_name="$1"
+    local script_path="$2"
+    
+    # Validate inputs
+    validate_inputs "optimize_entity_indexes" "db_name"
+    
+    local db_path
+    db_path=$(get_database_path "$db_name")
+    
+    # Check if database exists
+    require_file "$db_path" "Database file not found: $db_path"
+    
+    # Check if entities table exists
+    local entities_exist
+    entities_exist=$(safe_db_query "$db_path" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='entities';")
+    
+    if [[ "$entities_exist" -eq "0" ]]; then
+        log_warning "Database does not have entities table, skipping indexing: $db_path"
+        return 0
+    fi
+    
+    log_info "Optimizing entity indexes for database: $db_path"
+    
+    # If script path not provided, use default location
+    if [[ -z "$script_path" ]]; then
+        # First try to locate the script relative to this module
+        local module_dir="$(dirname "${BASH_SOURCE[0]}")/../.."
+        script_path="$module_dir/config/schemas/entity_indexes.sql"
+        
+        # If not found, try using a hardcoded path based on typical installation
+        if [[ ! -f "$script_path" ]]; then
+            script_path="/path/to/ingestor-system/config/schemas/entity_indexes.sql"
+        fi
+    fi
+    
+    # Check if the index script exists
+    if [[ ! -f "$script_path" ]]; then
+        log_error "Entity index script not found: $script_path"
+        raise_error "Entity index script not found: $script_path" $ERR_FILE_NOT_FOUND
+        return $ERR_FILE_NOT_FOUND
+    fi
+    
+    # Apply the indexes using our safe SQL function
+    log_debug "Applying entity indexes from $script_path"
+    
+    # Create a backup before modifying the database
+    if [[ "$DB_AUTO_BACKUP" == "true" ]]; then
+        log_debug "Creating backup before applying entity indexes"
+        backup_database "$db_name" >/dev/null || log_warning "Failed to backup database before optimization"
+    fi
+    
+    # Apply optimizations with retry and error handling
+    if type retry_function &>/dev/null; then
+        if retry_function safe_sql_query "$db_path" ".read $script_path" "$DB_RETRY_COUNT" "$DB_RETRY_DELAY"; then
+            log_info "Successfully optimized entity indexes in database: $db_name"
+            
+            # Get the number of indexes applied
+            local index_count
+            index_count=$(safe_db_query "$db_path" "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%entities%';")
+            
+            log_info "Applied/verified $index_count entity-related indexes"
+            
+            # Record the optimization in the database's maintenance log
+            create_maintenance_log_if_needed "$db_path"
+            safe_db_query "$db_path" "INSERT INTO maintenance_log (operation, details) VALUES ('entity_indexes_optimization', 'Added entity indexes for improved performance');" >/dev/null
+            
+            return 0
+        else
+            local exit_code=$?
+            log_error "Failed to apply entity indexes to database"
+            document_error $exit_code "optimize_entity_indexes" "Failed to apply entity indexes to $db_path"
+            return $exit_code
+        fi
+    else
+        # Fallback to basic approach without retry
+        if sqlite3 "$db_path" ".read $script_path" 2>/dev/null; then
+            log_info "Successfully optimized entity indexes in database: $db_name"
+            return 0
+        else
+            log_error "Failed to apply entity indexes to database"
+            raise_error "Failed to apply entity indexes to database: $db_path" $ERR_DATABASE
+            return $ERR_DATABASE
+        fi
+    fi
+}
+
+# Create maintenance log table if it doesn't exist
+create_maintenance_log_if_needed() {
+    local db_path="$1"
+    
+    # Create maintenance log table if it doesn't exist
+    local query="CREATE TABLE IF NOT EXISTS maintenance_log (
+        id INTEGER PRIMARY KEY,
+        operation TEXT NOT NULL,
+        details TEXT,
+        executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );"
+    
+    sqlite3 "$db_path" "$query" 2>/dev/null
 }

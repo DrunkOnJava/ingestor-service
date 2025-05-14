@@ -9,6 +9,13 @@ export PROJECT_ROOT
 
 # Check if BATS is installed
 check_bats() {
+    # First check if bats is installed in tests/libs/bats/bin
+    if [[ -x "${PROJECT_ROOT}/tests/libs/bats/bin/bats" ]]; then
+        export PATH="${PROJECT_ROOT}/tests/libs/bats/bin:$PATH"
+        return 0
+    fi
+    
+    # Then check if it's available on the system path
     if ! command -v bats &> /dev/null; then
         echo "BATS testing framework not found."
         echo "Please run ./scripts/install_test_deps.sh to install it."

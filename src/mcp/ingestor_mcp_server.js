@@ -39,29 +39,22 @@ const LOG_FILE = path.join(LOGS_DIR, `mcp_server_${new Date().toISOString().spli
   }
 });
 
-// Set up logging
+// Import structured logger
+const { logger } = require('./logger');
+
+// Configure logger based on environment variables
+logger.configure({
+  level: process.env.LOG_LEVEL || 'info',
+  format: process.env.LOG_FORMAT || 'human',
+  destination: process.env.LOG_DESTINATION || 'both',
+  filename: `mcp_server_${new Date().toISOString().split('T')[0]}.log`
+});
+
+// Set up logging (using the structured logger but maintaining backward compatibility)
 const log = {
-  info: (message) => {
-    const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] [INFO] ${message}\n`;
-    console.log(`[INFO] ${message}`);
-    fs.appendFileSync(LOG_FILE, logMessage);
-  },
-  error: (message, error) => {
-    const timestamp = new Date().toISOString();
-    const errorDetail = error ? `\n${error.stack || error}` : '';
-    const logMessage = `[${timestamp}] [ERROR] ${message}${errorDetail}\n`;
-    console.error(`[ERROR] ${message}`);
-    fs.appendFileSync(LOG_FILE, logMessage);
-  },
-  debug: (message) => {
-    if (process.env.DEBUG) {
-      const timestamp = new Date().toISOString();
-      const logMessage = `[${timestamp}] [DEBUG] ${message}\n`;
-      console.log(`[DEBUG] ${message}`);
-      fs.appendFileSync(LOG_FILE, logMessage);
-    }
-  }
+  info: (message) => logger.info(message),
+  error: (message, error) => logger.error(message, error),
+  debug: (message) => logger.debug(message)
 };
 
 // MCP server class

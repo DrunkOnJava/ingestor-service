@@ -1,10 +1,27 @@
 #!/usr/bin/env bash
 # BATS assertion functions
 
+# Determine tests directory if not defined
+if [[ -z "${TESTS_DIR}" ]]; then
+    # Try to determine the tests directory
+    if [[ -n "${DIR}" ]]; then
+        TESTS_DIR="${DIR}"
+    else
+        TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    fi
+fi
+
+# Make sure the BATS libraries exist
+if [[ ! -d "${TESTS_DIR}/libs/bats-support" ]]; then
+    echo "Error: BATS libraries not found in ${TESTS_DIR}/libs"
+    echo "Please run the install_test_deps.sh script first."
+    return 1
+fi
+
 # Load BATS libraries
-load "${DIR:-$PWD}/libs/bats-support/load"
-load "${DIR:-$PWD}/libs/bats-assert/load"
-load "${DIR:-$PWD}/libs/bats-file/load"
+load "${TESTS_DIR}/libs/bats-support/load"
+load "${TESTS_DIR}/libs/bats-assert/load"
+load "${TESTS_DIR}/libs/bats-file/load"
 
 # Assert that command was successful (return code 0)
 assert_success() {

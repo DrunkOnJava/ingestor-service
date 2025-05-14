@@ -6,28 +6,34 @@ labels: bug
 assignees: ''
 ---
 
-## Bug Description
-A clear and concise description of the bug.
+## Describe the bug
+A clear and concise description of what the bug is.
 
-## Steps to Reproduce
-1. 
-2. 
-3. 
+## To Reproduce
+Steps to reproduce the behavior:
+1. Run command '...'
+2. Process file '...'
+3. See error
 
-## Expected Behavior
+## Expected behavior
 A clear and concise description of what you expected to happen.
 
-## Actual Behavior
-What actually happened instead.
+## Logs
+If applicable, include log output or error messages.
 
-## Screenshots
-If applicable, add screenshots to help explain your problem.
+```
+Paste logs here
+```
 
-## Environment
-- OS: [e.g. macOS 13.2, Ubuntu 22.04]
-- Node.js version: [e.g. 18.12.0]
-- SQLite version: [e.g. 3.40.0]
-- Other relevant environment details
+## Environment:
+ - OS: [e.g. macOS, Ubuntu]
+ - Shell: [e.g. bash, zsh]
+ - Version: [e.g. 0.1.0]
+ - Dependencies:
+   - Bash version: 
+   - SQLite version:
+   - Node.js version (if applicable):
 
-## Additional Context
+## Additional context
 Add any other context about the problem here.
+EOL < /dev/null

@@ -2,26 +2,37 @@
 # Unit tests for the config.sh module
 
 # Load the test helper
-load ../test_helper
+load '../test_helper'
 
 # Setup - runs before each test
 setup() {
     # Call the common setup
     setup_test_environment
     
+    # TEST_TEMP_DIR is now set and created by setup_test_environment
+    
     # Set up mock variables with absolute paths
     export CONFIG_DIR="${TEST_TEMP_DIR}/config"
     export DATABASE_PROFILES_DIR="${CONFIG_DIR}/databases"
     export CONFIG_FILE="${CONFIG_DIR}/settings.yml"
-    export PROJECT_ROOT="${TEST_TEMP_DIR}/project"
+    # Use a distinct variable name to avoid conflicts with the real PROJECT_ROOT
+    export TEST_PROJECT_DIR="${TEST_TEMP_DIR}/project"
     
-    # Create necessary directories
+    # Create necessary directories with proper debugging
+    echo "Creating directories: CONFIG_DIR=${CONFIG_DIR}, DATABASE_PROFILES_DIR=${DATABASE_PROFILES_DIR}, TEST_PROJECT_DIR=${TEST_PROJECT_DIR}" >&2
     mkdir -p "${CONFIG_DIR}"
     mkdir -p "${DATABASE_PROFILES_DIR}"
-    mkdir -p "${PROJECT_ROOT}/src/modules"
+    mkdir -p "${TEST_PROJECT_DIR}/src/modules"
+    
+    # Debug check
+    if [[ ! -d "${TEST_PROJECT_DIR}/src/modules" ]]; then
+        echo "Error: Failed to create ${TEST_PROJECT_DIR}/src/modules directory" >&2
+        return 1
+    fi
     
     # Create a mock logging module with mock functions
-    cat > "${PROJECT_ROOT}/src/modules/logging.sh" << 'EOF'
+    mkdir -p "${TEST_PROJECT_DIR}/src/modules"
+    cat > "${TEST_PROJECT_DIR}/src/modules/logging.sh" << 'EOF'
 #!/bin/bash
 # Mock logging module for testing
 
@@ -43,10 +54,10 @@ log_error() {
 EOF
     
     # Source the mock logging module
-    source "${PROJECT_ROOT}/src/modules/logging.sh"
+    source "${TEST_PROJECT_DIR}/src/modules/logging.sh"
     
     # Create a mock keychain module
-    cat > "${PROJECT_ROOT}/src/modules/keychain.sh" << 'EOF'
+    cat > "${TEST_PROJECT_DIR}/src/modules/keychain.sh" << 'EOF'
 #!/bin/bash
 # Mock keychain module for testing
 
@@ -109,12 +120,10 @@ manage_api_key() {
 }
 EOF
     
-    # Create directories for modules
-    mkdir -p "${PROJECT_ROOT}/src/modules"
-    # No need to copy keychain.sh to itself, it's already created in the previous step
+    # No need to create additional directories, they're created above
     
     # Create a copy of the config module to test
-    cat > "${PROJECT_ROOT}/src/modules/config.sh" << EOF
+    cat > "${TEST_PROJECT_DIR}/src/modules/config.sh" << EOF
 #!/bin/bash
 # Configuration module for ingestor
 
@@ -144,10 +153,10 @@ load_config() {
     CLAUDE_API_KEY=$(grep "claude_api_key:" "$CONFIG_FILE" | cut -d ':' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     
     # Use keychain module to manage API key
-    if [[ -f "${PROJECT_ROOT}/src/modules/keychain.sh" ]]; then
+    if [[ -f "${TEST_PROJECT_DIR}/src/modules/keychain.sh" ]]; then
         # Only source if we haven't already
         if [[ -z "$KEYCHAIN_LOADED" ]]; then
-            source "${PROJECT_ROOT}/src/modules/keychain.sh"
+            source "${TEST_PROJECT_DIR}/src/modules/keychain.sh"
             KEYCHAIN_LOADED=1
         fi
         
@@ -295,7 +304,7 @@ get_database_profile() {
 }
     
     # Source the config module
-    source "${PROJECT_ROOT}/src/modules/config.sh"
+    source "${TEST_PROJECT_DIR}/src/modules/config.sh"
 
 # Teardown - runs after each test
 teardown() {
@@ -306,35 +315,19 @@ teardown() {
 # Test config file creation
 @test "create_default_config creates the config directories and files" {
     # Make sure the temp dir is available
-    echo "Using temp dir: ${TEST_TEMP_DIR}"
     mkdir -p "${TEST_TEMP_DIR}/config"
     
-    # Debug - print current dir and contents
-    echo "Current directory: $(pwd)"
-    echo "Files in ${TEST_TEMP_DIR}: $(ls -la ${TEST_TEMP_DIR})"
-    
     create_default_config
-    
-    # Debug - print after execution
-    echo "Files in ${TEST_TEMP_DIR}/config after execution: $(ls -la ${TEST_TEMP_DIR}/config)"
     
     # Check if directories were created
     assert_dir_exists "${TEST_TEMP_DIR}/config"
     assert_dir_exists "${TEST_TEMP_DIR}/config/databases"
     
-    # Check if config file was created - direct check
-    if [[ ! -f "${TEST_TEMP_DIR}/config/settings.yml" ]]; then
-        echo "ERROR: Configuration file was not created at ${TEST_TEMP_DIR}/config/settings.yml"
-        echo "Contents of config directory: $(ls -la ${TEST_TEMP_DIR}/config)"
-        return 1
-    fi
+    # Check if config file was created - using assertions
+    assert_file_exists "${TEST_TEMP_DIR}/config/settings.yml"
     
-    # Check if database profile was created - direct check
-    if [[ ! -f "${TEST_TEMP_DIR}/config/databases/general.yml" ]]; then
-        echo "ERROR: Database profile was not created at ${TEST_TEMP_DIR}/config/databases/general.yml"
-        echo "Contents of databases directory: $(ls -la ${TEST_TEMP_DIR}/config/databases)"
-        return 1
-    fi
+    # Check if database profile was created - using assertions
+    assert_file_exists "${TEST_TEMP_DIR}/config/databases/general.yml"
     
     # Check content of config file
     run grep "claude_api_key: KEYCHAIN" "${TEST_TEMP_DIR}/config/settings.yml"
@@ -351,12 +344,12 @@ teardown() {
 @test "load_config loads existing configuration correctly" {
     # Create a custom config file
     mkdir -p "${TEST_TEMP_DIR}/config"
-    cat > "${TEST_TEMP_DIR}/config/settings.yml" << EOF
+    cat > "${TEST_TEMP_DIR}/config/settings.yml" << 'EOFCUSTOM'
 # Custom Ingestor Configuration
 claude_api_key: test_api_key
 default_database: custom_db
 log_level: debug
-EOF
+EOFCUSTOM
     
     # Run load_config
     run load_config
@@ -372,12 +365,12 @@ EOF
 @test "load_config retrieves API key from keychain when configured" {
     # Create a config file with KEYCHAIN setting
     mkdir -p "${TEST_TEMP_DIR}/config"
-    cat > "${TEST_TEMP_DIR}/config/settings.yml" << EOF
+    cat > "${TEST_TEMP_DIR}/config/settings.yml" << 'EOFKEYCHAIN'
 # Keychain Ingestor Configuration
 claude_api_key: KEYCHAIN
 default_database: general
 log_level: info
-EOF
+EOFKEYCHAIN
     
     # Run load_config
     run load_config

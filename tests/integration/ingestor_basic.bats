@@ -570,7 +570,7 @@ run_batch_mode() {
     if [[ ! -d "$directory" ]]; then
         log_error "Directory not found: $directory"
         return 1
-    }
+    fi
     
     log_info "Running batch mode on directory: $directory"
     log_info "Using database: $database"
