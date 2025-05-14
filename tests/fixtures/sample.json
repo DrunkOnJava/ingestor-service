@@ -1,0 +1,81 @@
+{
+  "name": "Ingestor Test Data",
+  "version": "1.0.0",
+  "description": "Sample JSON file for testing the ingestor system",
+  "author": "Claude",
+  "date": "2025-05-13",
+  "testCases": [
+    {
+      "id": 1,
+      "name": "Basic Text Processing",
+      "files": ["sample.txt"],
+      "expected": {
+        "success": true,
+        "contentType": "text/plain",
+        "hasAnalysis": true
+      }
+    },
+    {
+      "id": 2,
+      "name": "Image Processing",
+      "files": ["sample.jpg"],
+      "expected": {
+        "success": true,
+        "contentType": "image/jpeg",
+        "hasMetadata": true,
+        "hasAnalysis": true
+      }
+    },
+    {
+      "id": 3,
+      "name": "PDF Processing",
+      "files": ["sample.pdf"],
+      "expected": {
+        "success": true,
+        "contentType": "application/pdf",
+        "hasTextExtraction": true,
+        "hasAnalysis": true
+      }
+    },
+    {
+      "id": 4,
+      "name": "Code Processing",
+      "files": ["sample.py"],
+      "expected": {
+        "success": true,
+        "contentType": "text/x-python",
+        "language": "python",
+        "hasAnalysis": true
+      }
+    },
+    {
+      "id": 5,
+      "name": "Batch Processing",
+      "files": ["sample.txt", "sample.jpg", "sample.pdf", "sample.py"],
+      "expected": {
+        "success": true,
+        "processedCount": 4,
+        "failedCount": 0
+      }
+    }
+  ],
+  "configuration": {
+    "chunking": {
+      "enabled": true,
+      "strategies": ["size", "paragraph", "sentence"],
+      "defaultStrategy": "paragraph",
+      "defaultSize": 500000,
+      "defaultOverlap": 5000
+    },
+    "analysis": {
+      "model": "claude-3-opus-20240229",
+      "temperature": 0.7,
+      "maxTokens": 4096
+    },
+    "database": {
+      "schema": "test_schema.sql",
+      "journal_mode": "WAL",
+      "auto_vacuum": true
+    }
+  }
+}

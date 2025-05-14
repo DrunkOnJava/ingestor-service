@@ -22,11 +22,13 @@ DB_DIR="${INGESTOR_HOME}/databases"
 LOG_DIR="${INGESTOR_HOME}/logs"
 
 # Import modules - adjust paths as needed
-source "${PROJECT_ROOT}/src/modules/config.sh"
-source "${PROJECT_ROOT}/src/modules/logging.sh"
+source "${PROJECT_ROOT}/src/modules/logging.sh"      # Import logging first so other modules can use it
+source "${PROJECT_ROOT}/src/modules/keychain.sh"     # Import keychain for credential management
+source "${PROJECT_ROOT}/src/modules/config.sh"       # Config depends on keychain
 source "${PROJECT_ROOT}/src/modules/content.sh"
 source "${PROJECT_ROOT}/src/modules/database.sh"
 source "${PROJECT_ROOT}/src/modules/claude.sh"
+source "${PROJECT_ROOT}/src/modules/credentials.sh"  # Credential management functionality
 
 # Initialize environment
 setup_environment() {
@@ -38,6 +40,16 @@ setup_environment() {
     
     # Load configuration
     load_config
+    
+    # Setup keychain credentials if keychain is available
+    if keychain_available; then
+        if [[ "$MODE" == "interactive" ]]; then
+            # Only prompt for credentials in interactive mode
+            setup_keychain_credentials
+        fi
+    else
+        log_warning "Keychain is not available. Credentials will not be stored securely."
+    fi
     
     # Setup cleanup trap
     trap cleanup EXIT INT TERM
@@ -60,19 +72,45 @@ Ingestor v${INGESTOR_VERSION} - Content processing system
 Usage: ingestor [OPTIONS]
 
 Options:
-  --database, -d DB_NAME    Specify database to use
-  --file, -f FILE_PATH      Process a specific file
-  --batch, -b               Run in batch mode
-  --config, -c CONFIG       Use specific configuration file
-  --list-dbs, -l            List available databases
-  --init-db, -i DB_NAME     Initialize a new database
-  --verbose, -v             Enable verbose logging
-  --help, -h                Show this help message
+  --database, -d DB_NAME       Specify database to use
+  --file, -f FILE_PATH         Process a specific file
+  
+  Batch Mode Options:
+  --batch, -b                  Run in batch mode
+  --directory, -dir PATH       Directory containing files to process
+  --extensions, -ext PATTERN   File extensions to process (default: "*")
+  --recursive, -r              Process directories recursively
+  --max-files, -m NUMBER       Maximum number of files to process (0 = unlimited)
+  
+  Chunking Options:
+  --enable-chunking, -ec       Enable content chunking (default)
+  --disable-chunking, -dc      Disable content chunking
+  --chunk-size, -cs SIZE       Size of each chunk in bytes (default: 500000)
+  --chunk-overlap, -co SIZE    Overlap between chunks in bytes (default: 5000)
+  --chunk-strategy, -cst STRAT Chunking strategy (size, paragraph, sentence)
+  
+  Credential Management:
+  --manage-credentials, -mc    Interactive credential management menu
+  --set-api-key, -sak KEY      Set Claude API key
+  --keychain, -k               Store credentials in system keychain
+  
+  Other Options:
+  --config, -c CONFIG          Use specific configuration file
+  --list-dbs, -l               List available databases
+  --init-db, -i DB_NAME        Initialize a new database
+  --verbose, -v                Enable verbose logging
+  --help, -h                   Show this help message
 
 Examples:
-  ingestor -d research           # Interactive mode with research database
-  ingestor -f image.jpg -d media # Process image.jpg into media database
-  ingestor -b -d code            # Batch processing into code database
+  ingestor -d research                                # Interactive mode with research database
+  ingestor -f image.jpg -d media                      # Process image.jpg into media database
+  ingestor -b -dir ./documents -d research            # Process all files in ./documents
+  ingestor -b -dir ./images -ext "*.jpg" -d media     # Process only JPG files in ./images
+  ingestor -b -dir ./code -ext "*.py" -r -d code      # Process Python files recursively
+  ingestor -f large_text.txt -d research -cs 250000   # Process with smaller chunks
+  ingestor -f code.py -d code -cst paragraph          # Chunk by paragraphs
+  ingestor -mc                                        # Manage credentials interactively
+  ingestor -sak "your_api_key" -k                     # Store API key securely in keychain
 
 For more information, visit: https://github.com/yourusername/ingestor
 EOF
@@ -83,7 +121,22 @@ process_arguments() {
     DATABASE=""
     MODE="interactive"
     FILE_PATH=""
+    DIRECTORY_PATH=""
+    FILE_EXTENSIONS="*"
+    RECURSIVE=false
+    MAX_FILES=0  # 0 means process all files
     VERBOSE=false
+    
+    # Default chunking settings
+    ENABLE_CHUNKING=true  # Enable by default
+    CHUNK_SIZE=500000     # Default ~500KB chunks
+    CHUNK_OVERLAP=5000    # Default ~5KB overlap
+    CHUNK_STRATEGY="size" # Possible values: size, paragraph, sentence
+    
+    # Credential management
+    API_KEY_VALUE=""
+    SET_API_KEY=false
+    USE_KEYCHAIN=false
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -100,6 +153,58 @@ process_arguments() {
                 MODE="batch"
                 shift
                 ;;
+            --directory|-dir)
+                DIRECTORY_PATH="$2"
+                shift 2
+                ;;
+            --extensions|-ext)
+                FILE_EXTENSIONS="$2"
+                shift 2
+                ;;
+            --recursive|-r)
+                RECURSIVE=true
+                shift
+                ;;
+            --max-files|-m)
+                MAX_FILES="$2"
+                shift 2
+                ;;
+            # Chunking options
+            --enable-chunking|-ec)
+                ENABLE_CHUNKING=true
+                shift
+                ;;
+            --disable-chunking|-dc)
+                ENABLE_CHUNKING=false
+                shift
+                ;;
+            --chunk-size|-cs)
+                CHUNK_SIZE="$2"
+                shift 2
+                ;;
+            --chunk-overlap|-co)
+                CHUNK_OVERLAP="$2"
+                shift 2
+                ;;
+            --chunk-strategy|-cst)
+                CHUNK_STRATEGY="$2"
+                shift 2
+                ;;
+            # Credential management
+            --manage-credentials|-mc)
+                MODE="manage-credentials"
+                shift
+                ;;
+            --set-api-key|-sak)
+                API_KEY_VALUE="$2"
+                SET_API_KEY=true
+                shift 2
+                ;;
+            --keychain|-k)
+                USE_KEYCHAIN=true
+                shift
+                ;;
+            # Other options
             --config|-c)
                 CONFIG_FILE="$2"
                 shift 2
@@ -130,7 +235,7 @@ process_arguments() {
     done
     
     # Check requirements based on mode
-    if [[ "$MODE" != "list-dbs" && "$MODE" != "help" && -z "$DATABASE" ]]; then
+    if [[ "$MODE" != "list-dbs" && "$MODE" != "help" && "$MODE" != "manage-credentials" && -z "$DATABASE" ]]; then
         if [[ "$MODE" != "init-db" ]]; then
             log_error "Database name is required. Use --database option."
             exit 1
@@ -139,6 +244,17 @@ process_arguments() {
     
     if [[ "$MODE" = "file" && -z "$FILE_PATH" ]]; then
         log_error "File path is required for file mode. Use --file option."
+        exit 1
+    fi
+    
+    if [[ "$MODE" = "batch" && -z "$DIRECTORY_PATH" ]]; then
+        log_error "Directory path is required for batch mode. Use --directory option."
+        exit 1
+    fi
+    
+    # Handle API key setting separately
+    if [[ "$SET_API_KEY" = true && -z "$API_KEY_VALUE" ]]; then
+        log_error "API key value is required when using --set-api-key option."
         exit 1
     fi
 }
@@ -171,19 +287,134 @@ process_file() {
     
     if [[ ! -f "$file_path" ]]; then
         log_error "File not found: $file_path"
-        exit 1
+        return 1
     fi
     
     log_info "Processing file: $file_path for database: $database"
     
     # Detect content type and process accordingly
-    local content_type=$(detect_content_type "$file_path")
+    local content_type
+    content_type=$(detect_content_type "$file_path")
+    
+    if [[ -z "$content_type" ]]; then
+        log_error "Failed to detect content type for: $file_path"
+        return 1
+    fi
+    
     log_info "Detected content type: $content_type"
+    log_info "Using chunking settings: enabled=$ENABLE_CHUNKING, size=$CHUNK_SIZE, overlap=$CHUNK_OVERLAP, strategy=$CHUNK_STRATEGY"
     
-    # Process based on content type
-    process_content "$file_path" "$database"
+    # Process based on content type with chunking settings
+    if process_content "$file_path" "$database" "$ENABLE_CHUNKING" "$CHUNK_SIZE" "$CHUNK_OVERLAP" "$CHUNK_STRATEGY"; then
+        log_info "File processing completed successfully: $file_path"
+        return 0
+    else
+        log_error "File processing failed: $file_path"
+        return 1
+    fi
+}
+
+# Process files in batch mode
+run_batch_mode() {
+    local directory_path="$1"
+    local database="$2"
+    local file_pattern="${3:-*}"
+    local recursive="$4"
+    local max_files="$5"
     
-    log_info "File processing completed"
+    if [[ ! -d "$directory_path" ]]; then
+        log_error "Directory not found: $directory_path"
+        exit 1
+    fi
+    
+    log_info "Starting batch processing from directory: $directory_path"
+    log_info "Using database: $database"
+    log_info "File pattern: $file_pattern"
+    log_info "Recursive mode: ${recursive:-false}"
+    if [[ $max_files -gt 0 ]]; then
+        log_info "Maximum files to process: $max_files"
+    else
+        log_info "Processing all matching files"
+    fi
+    
+    # Prepare find command based on recursive flag
+    local find_cmd
+    if [[ "$recursive" == "true" ]]; then
+        find_cmd="find \"$directory_path\" -type f -name \"$file_pattern\""
+    else
+        find_cmd="find \"$directory_path\" -maxdepth 1 -type f -name \"$file_pattern\""
+    fi
+    
+    # Add sorting by modification time (newest first)
+    find_cmd="$find_cmd -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-"
+    
+    # Add limit if max_files is set
+    if [[ $max_files -gt 0 ]]; then
+        find_cmd="$find_cmd | head -n $max_files"
+    fi
+    
+    log_debug "Find command: $find_cmd"
+    
+    # Execute find command and store results
+    local files_to_process
+    files_to_process=$(eval "$find_cmd")
+    
+    # Count files
+    local file_count
+    file_count=$(echo "$files_to_process" | wc -l)
+    
+    if [[ -z "$files_to_process" ]]; then
+        log_warning "No files found matching pattern: $file_pattern"
+        exit 0
+    fi
+    
+    log_info "Found $file_count files to process"
+    
+    # Process each file
+    local processed=0
+    local skipped=0
+    local failed=0
+    
+    echo "==========================================="
+    echo "Batch Processing: $file_count files"
+    echo "==========================================="
+    
+    while IFS= read -r file_path; do
+        if [[ -z "$file_path" ]]; then
+            continue
+        fi
+        
+        echo "Processing ($((processed + 1))/$file_count): $(basename "$file_path")"
+        
+        # Check if file exists and is readable
+        if [[ ! -f "$file_path" || ! -r "$file_path" ]]; then
+            log_warning "Skipping inaccessible file: $file_path"
+            skipped=$((skipped + 1))
+            continue
+        fi
+        
+        # Process the file
+        if process_file "$file_path" "$database"; then
+            processed=$((processed + 1))
+            echo "✓ Processed: $file_path"
+        else
+            failed=$((failed + 1))
+            echo "✗ Failed: $file_path"
+        fi
+        
+        echo "-----------------------------------------"
+    done <<< "$files_to_process"
+    
+    echo "==========================================="
+    echo "Batch Processing Summary"
+    echo "==========================================="
+    echo "Total files found:  $file_count"
+    echo "Successfully processed: $processed"
+    echo "Failed: $failed"
+    echo "Skipped: $skipped"
+    echo "==========================================="
+    
+    log_info "Batch processing completed"
 }
 
 # List available databases
@@ -269,8 +500,52 @@ init_database_cli() {
 
 # Main entry point with workflow orchestration
 main() {
-    setup_environment
+    # Process arguments first for early validation
     process_arguments "$@"
+    
+    # Special case: if setting API key directly, do it before loading configs
+    if [[ "$SET_API_KEY" = true && -n "$API_KEY_VALUE" ]]; then
+        if [[ "$USE_KEYCHAIN" = true ]]; then
+            # Initialize basic logging without full environment
+            init_logging
+            
+            if ! keychain_available; then
+                log_error "Keychain is not available on this system, cannot store API key in keychain."
+                exit 1
+            fi
+            
+            if store_keychain_credential "claude_api_key" "$API_KEY_VALUE"; then
+                echo "Claude API key stored successfully in keychain."
+                # Update config to use keychain
+                if [[ -f "$CONFIG_FILE" ]]; then
+                    update_config_for_keychain
+                fi
+                exit 0
+            else
+                log_error "Failed to store Claude API key in keychain."
+                exit 1
+            fi
+        else
+            # Simply write to the config file
+            # Make sure config directory exists
+            mkdir -p "$CONFIG_DIR"
+            
+            # Check if config exists, if not create it first
+            if [[ ! -f "$CONFIG_FILE" ]]; then
+                # Initialize basic logging
+                init_logging
+                create_default_config
+            fi
+            
+            # Now update the config with the provided API key
+            store_key_in_config "$API_KEY_VALUE"
+            echo "Claude API key set in configuration file."
+            exit 0
+        fi
+    fi
+    
+    # Set up the environment for normal operation
+    setup_environment
     
     case "$MODE" in
         interactive)
@@ -280,15 +555,16 @@ main() {
             process_file "$FILE_PATH" "$DATABASE"
             ;;
         batch)
-            # TODO: Implement batch mode
-            log_error "Batch mode not implemented yet"
-            exit 1
+            run_batch_mode "$DIRECTORY_PATH" "$DATABASE" "$FILE_EXTENSIONS" "$RECURSIVE" "$MAX_FILES"
             ;;
         list-dbs)
             list_databases
             ;;
         init-db)
             init_database_cli "$DB_NAME"
+            ;;
+        manage-credentials)
+            manage_credentials_interactive
             ;;
     esac
 }

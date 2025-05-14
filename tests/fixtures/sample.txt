@@ -1,0 +1,11 @@
+This is a sample text file for testing the ingestor system.
+
+It contains multiple paragraphs to test the chunking functionality.
+
+This paragraph tests paragraph-based chunking.
+
+The ingestor system should be able to process this file and extract meaningful information.
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec auctor, felis eget ultricies lacinia, 
+nunc nisl aliquam nisi, eget aliquam nisl nunc vel nisl. Donec auctor, felis eget ultricies lacinia,
+nunc nisl aliquam nisi, eget aliquam nisl nunc vel nisl.

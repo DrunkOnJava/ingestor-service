@@ -25,10 +25,22 @@ load_config() {
     # Read API key
     CLAUDE_API_KEY=$(grep "claude_api_key:" "$CONFIG_FILE" | cut -d ':' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     
-    # Check if we have a keychain reference instead of direct key
-    if [[ "$CLAUDE_API_KEY" == "KEYCHAIN" ]]; then
-        if command -v security &> /dev/null; then
-            CLAUDE_API_KEY=$(security find-generic-password -a "ingestor" -s "claude_api_key" -w 2>/dev/null)
+    # Use keychain module to manage API key
+    if [[ -f "${PROJECT_ROOT}/src/modules/keychain.sh" ]]; then
+        # Only source if we haven't already
+        if [[ -z "$KEYCHAIN_LOADED" ]]; then
+            source "${PROJECT_ROOT}/src/modules/keychain.sh"
+            KEYCHAIN_LOADED=1
+        fi
+        
+        # Manage API key with keychain integration
+        CLAUDE_API_KEY=$(manage_api_key "claude_api_key" "$CLAUDE_API_KEY" "Enter your Claude API key")
+    else
+        # Fallback to the old method if keychain module is not available
+        if [[ "$CLAUDE_API_KEY" == "KEYCHAIN" ]]; then
+            if command -v security &> /dev/null; then
+                CLAUDE_API_KEY=$(security find-generic-password -a "$USER" -s "ingestor-system-claude_api_key" -w 2>/dev/null)
+            fi
         fi
     fi
     
