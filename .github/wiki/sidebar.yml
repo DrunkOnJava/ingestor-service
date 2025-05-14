@@ -1,0 +1,37 @@
+sidebar:
+  - title: Home
+    page: Home
+  - title: Getting Started
+    children:
+      - title: Contributing
+        page: Contributing
+      - title: Project Organization
+        page: Project-Organization
+      - title: Development Roadmap
+        page: Development-Roadmap
+  - title: Architecture
+    children:
+      - title: CLI Architecture
+        page: CLI-Architecture
+      - title: API Design
+        page: API-Design
+  - title: Features
+    children:
+      - title: Entity Extraction Design
+        page: Entity-Extraction-Design
+      - title: Entity Extraction Usage Guide
+        page: Entity-Extraction-Usage-Guide
+      - title: MCP Server Guide
+        page: MCP-Server-Guide
+  - title: Development
+    children:
+      - title: Error Handling
+        page: Error-Handling
+      - title: Parallel Processing
+        page: Parallel-Processing
+      - title: Structured Logging
+        page: Structured-Logging
+      - title: Performance Profiling
+        page: Performance-Profiling
+      - title: Wiki Contribution Guide
+        page: Wiki-Contribution-Guide

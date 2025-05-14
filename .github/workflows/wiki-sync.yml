@@ -1,0 +1,292 @@
+name: Wiki Synchronization
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**/*.md'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - '.github/wiki/**'
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: 'Force update all wiki pages'
+        required: false
+        default: false
+        type: boolean
+      specific_files:
+        description: 'Comma-separated list of specific files to update (leave empty for automatic detection)'
+        required: false
+        type: string
+      verify_links:
+        description: 'Verify internal links in wiki'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+
+      - name: Install Dependencies
+        run: |
+          npm install -g markdown-it markdown-link-check yaml
+
+      - name: Setup Git User
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check for Wiki Configuration
+        id: check-config
+        run: |
+          mkdir -p .github/wiki
+          if [ ! -f .github/wiki/page-mapping.yml ]; then
+            echo "Creating default page mapping configuration"
+            cat > .github/wiki/page-mapping.yml << EOF
+          mapping:
+            "README.md": "Home"
+            "CONTRIBUTING.md": "Contributing"
+            "docs/CLI_ARCHITECTURE.md": "CLI-Architecture"
+            "docs/API_DESIGN.md": "API-Design"
+            "docs/development/wiki_contributions.md": "Wiki-Contribution-Guide"
+          EOF
+          fi
+          
+          if [ ! -f .github/wiki/sidebar.yml ]; then
+            echo "Creating default sidebar configuration"
+            cat > .github/wiki/sidebar.yml << EOF
+          sidebar:
+            - title: Home
+              page: Home
+            - title: Getting Started
+              children:
+                - title: Contributing
+                  page: Contributing
+            - title: Documentation
+              children:
+                - title: CLI Architecture
+                  page: CLI-Architecture
+                - title: API Design
+                  page: API-Design
+                - title: Wiki Contribution Guide
+                  page: Wiki-Contribution-Guide
+          EOF
+          fi
+          
+          echo "CONFIG_EXISTS=true" >> $GITHUB_OUTPUT
+
+      - name: Prepare Wiki Repository
+        id: wiki-repo
+        run: |
+          WIKI_DIR="$GITHUB_WORKSPACE/wiki"
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.wiki.git"
+          
+          # Clone wiki repository (create empty if it doesn't exist)
+          mkdir -p "$WIKI_DIR"
+          
+          if git clone "$REPO_URL" "$WIKI_DIR" 2>/dev/null; then
+            echo "Cloned existing wiki repository"
+            WIKI_EXISTS=true
+          else
+            echo "Wiki repository doesn't exist yet, creating empty wiki"
+            cd "$WIKI_DIR"
+            git init
+            git config --local user.name "GitHub Actions Bot"
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git remote add origin "$REPO_URL"
+            # Create a placeholder Home page to initialize the wiki
+            echo "# Home Page\n\nWelcome to the Ingestor System wiki. This content will be replaced shortly." > Home.md
+            git add Home.md
+            git commit -m "Initialize wiki with placeholder Home page"
+            WIKI_EXISTS=false
+          fi
+          
+          echo "WIKI_DIR=$WIKI_DIR" >> $GITHUB_OUTPUT
+          echo "WIKI_EXISTS=$WIKI_EXISTS" >> $GITHUB_OUTPUT
+
+      - name: Process Files for Wiki
+        id: process-files
+        run: |
+          # Load configurations
+          FORCE_UPDATE=${{ github.event.inputs.force_update || 'false' }}
+          SPECIFIC_FILES="${{ github.event.inputs.specific_files }}"
+          WIKI_DIR="${{ steps.wiki-repo.outputs.WIKI_DIR }}"
+          
+          # Parse the page mapping configuration
+          MAPPING_CONFIG=$(cat .github/wiki/page-mapping.yml)
+          
+          # Function to process a single file
+          process_file() {
+            SRC_FILE="$1"
+            DEST_PAGE="$2"
+            
+            if [ ! -f "$SRC_FILE" ]; then
+              echo "Source file $SRC_FILE does not exist, skipping"
+              return
+            fi
+            
+            echo "Processing $SRC_FILE -> $DEST_PAGE"
+            
+            # Copy and process Markdown content
+            cp "$SRC_FILE" "$WIKI_DIR/$DEST_PAGE.md"
+            
+            # Add footer to the wiki page
+            echo -e "\n---\n" >> "$WIKI_DIR/$DEST_PAGE.md"
+            echo -e "Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$WIKI_DIR/$DEST_PAGE.md"
+            echo -e "Source: [$SRC_FILE](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/main/$SRC_FILE)" >> "$WIKI_DIR/$DEST_PAGE.md"
+            
+            # Track processed files
+            echo "$DEST_PAGE" >> "$WIKI_DIR/.processed_pages"
+          }
+          
+          # Create a list of files to process
+          cd $GITHUB_WORKSPACE
+          
+          # Create a file to track processed pages
+          touch "$WIKI_DIR/.processed_pages"
+          
+          # Process files based on configuration and inputs
+          if [ "$FORCE_UPDATE" == "true" ]; then
+            # Process all files in mapping
+            while IFS= read -r line; do
+              if [[ $line =~ \"([^\"]+)\":\ \"([^\"]+)\" ]]; then
+                SRC="${BASH_REMATCH[1]}"
+                DEST="${BASH_REMATCH[2]}"
+                process_file "$SRC" "$DEST"
+              fi
+            done < <(grep -E '"[^"]+":\s+"[^"]+"' .github/wiki/page-mapping.yml)
+          elif [ ! -z "$SPECIFIC_FILES" ]; then
+            # Process only specified files
+            IFS=',' read -ra FILES <<< "$SPECIFIC_FILES"
+            for FILE in "${FILES[@]}"; do
+              FILE=$(echo "$FILE" | xargs)  # trim whitespace
+              DEST=$(grep -E "\"$FILE\":" .github/wiki/page-mapping.yml | sed -E 's/.*"([^"]+)".*/\1/')
+              if [ ! -z "$DEST" ]; then
+                process_file "$FILE" "$DEST"
+              else
+                echo "Warning: No mapping found for $FILE"
+              fi
+            done
+          else
+            # Process files that have changed
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E '\.md$' || true)
+            if [ ! -z "$CHANGED_FILES" ]; then
+              while IFS= read -r FILE; do
+                DEST=$(grep -E "\"$FILE\":" .github/wiki/page-mapping.yml | sed -E 's/.*:\s*"([^"]+)".*/\1/')
+                if [ ! -z "$DEST" ]; then
+                  process_file "$FILE" "$DEST"
+                fi
+              done <<< "$CHANGED_FILES"
+            else
+              echo "No Markdown files changed in this commit"
+            fi
+          fi
+          
+          # Process the sidebar configuration
+          if [ -f .github/wiki/sidebar.yml ]; then
+            cp .github/wiki/sidebar.yml "$WIKI_DIR/_Sidebar.yml"
+            # Create a Markdown version of the sidebar
+            echo "# Navigation" > "$WIKI_DIR/_Sidebar.md"
+            echo "" >> "$WIKI_DIR/_Sidebar.md"
+            
+            # Process sidebar YAML to Markdown (simplified)
+            python -c '
+import yaml
+import sys
+
+def process_item(item, level=0):
+    result = []
+    indent = "  " * level
+    if "title" in item and "page" in item:
+        result.append(f"{indent}* [[{item['page']}|{item['title']}]]")
+    elif "title" in item:
+        result.append(f"{indent}* **{item['title']}**")
+    
+    if "children" in item:
+        for child in item["children"]:
+            result.extend(process_item(child, level + 1))
+    
+    return result
+
+try:
+    with open("'$WIKI_DIR'/_Sidebar.yml", "r") as f:
+        sidebar = yaml.safe_load(f)
+    
+    if "sidebar" in sidebar and isinstance(sidebar["sidebar"], list):
+        lines = []
+        for item in sidebar["sidebar"]:
+            lines.extend(process_item(item))
+        
+        with open("'$WIKI_DIR'/_Sidebar.md", "a") as f:
+            f.write("\n".join(lines))
+        print("Sidebar navigation generated successfully")
+    else:
+        print("Invalid sidebar structure")
+        sys.exit(1)
+except Exception as e:
+    print(f"Error processing sidebar: {e}")
+    sys.exit(1)
+'
+          fi
+          
+          echo "PROCESSED=true" >> $GITHUB_OUTPUT
+
+      - name: Commit Changes to Wiki
+        id: commit-wiki
+        run: |
+          WIKI_DIR="${{ steps.wiki-repo.outputs.WIKI_DIR }}"
+          cd "$WIKI_DIR"
+          
+          # Check if there are any changes to commit
+          if git status --porcelain | grep -q .; then
+            git add .
+            git commit -m "Update wiki content via GitHub Actions
+          
+          Source commit: ${GITHUB_SHA}"
+            
+            # Push changes to the wiki repository
+            if [[ "${{ steps.wiki-repo.outputs.WIKI_EXISTS }}" == "true" ]]; then
+              git push origin master
+            else
+              git push -u origin master
+            fi
+            
+            echo "CHANGES_PUSHED=true" >> $GITHUB_OUTPUT
+          else
+            echo "No changes to commit to wiki"
+            echo "CHANGES_PUSHED=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Issue on Failure
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Wiki Synchronization Failed',
+              body: `The wiki synchronization workflow failed on commit ${context.sha}.
+
+            Please check the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.
+            
+            Common issues include:
+            - Markdown syntax errors
+            - Broken internal links
+            - Configuration issues in .github/wiki files
+            - Wiki repository access problems
+            
+            You may need to manually fix the wiki or trigger the workflow again with the "Force update all wiki pages" option.`
+            });
