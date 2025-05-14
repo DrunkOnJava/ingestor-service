@@ -7,6 +7,8 @@ on:
       - 'docs/**/*.md'
       - 'README.md'
       - 'CONTRIBUTING.md'
+      - 'ORGANIZATION.md'
+      - 'DEVELOPMENT_ROADMAP.md'
       - '.github/wiki/**'
   workflow_dispatch:
     inputs:
@@ -52,6 +54,8 @@ jobs:
         id: check-config
         run: |
           mkdir -p .github/wiki
+          
+          # Ensure page-mapping.yml exists or create default
           if [ ! -f .github/wiki/page-mapping.yml ]; then
             echo "Creating default page mapping configuration"
             cat > .github/wiki/page-mapping.yml << EOF
@@ -59,11 +63,12 @@ jobs:
             "README.md": "Home"
             "CONTRIBUTING.md": "Contributing"
             "docs/CLI_ARCHITECTURE.md": "CLI-Architecture"
-            "docs/API_DESIGN.md": "API-Design"
+            "docs/api/API_DESIGN.md": "API-Design"
             "docs/development/wiki_contributions.md": "Wiki-Contribution-Guide"
           EOF
           fi
           
+          # Ensure sidebar.yml exists or create default
           if [ ! -f .github/wiki/sidebar.yml ]; then
             echo "Creating default sidebar configuration"
             cat > .github/wiki/sidebar.yml << EOF
@@ -82,6 +87,29 @@ jobs:
                   page: API-Design
                 - title: Wiki Contribution Guide
                   page: Wiki-Contribution-Guide
+          EOF
+          fi
+          
+          # Ensure footer.md exists or create default
+          if [ ! -f .github/wiki/footer.md ]; then
+            echo "Creating default footer"
+            cat > .github/wiki/footer.md << EOF
+          ---
+          
+          ## Navigation
+          
+          - [Home](Home) - Main wiki page
+          - [Contributing](Contributing) - How to contribute to the project
+          
+          ## Repository Links
+          
+          - [GitHub Repository](https://github.com/\${GITHUB_REPOSITORY})
+          - [Issues](https://github.com/\${GITHUB_REPOSITORY}/issues)
+          
+          ---
+          
+          *Last updated: {{LAST_UPDATED}}*  
+          *Source: [{{SOURCE_FILE}}]({{SOURCE_URL}})*
           EOF
           fi
           
@@ -123,9 +151,7 @@ jobs:
           FORCE_UPDATE=${{ github.event.inputs.force_update || 'false' }}
           SPECIFIC_FILES="${{ github.event.inputs.specific_files }}"
           WIKI_DIR="${{ steps.wiki-repo.outputs.WIKI_DIR }}"
-          
-          # Parse the page mapping configuration
-          MAPPING_CONFIG=$(cat .github/wiki/page-mapping.yml)
+          REPO="${GITHUB_REPOSITORY}"
           
           # Function to process a single file
           process_file() {
@@ -139,13 +165,23 @@ jobs:
             
             echo "Processing $SRC_FILE -> $DEST_PAGE"
             
-            # Copy and process Markdown content
+            # Copy Markdown content
             cp "$SRC_FILE" "$WIKI_DIR/$DEST_PAGE.md"
             
-            # Add footer to the wiki page
-            echo -e "\n---\n" >> "$WIKI_DIR/$DEST_PAGE.md"
-            echo -e "Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$WIKI_DIR/$DEST_PAGE.md"
-            echo -e "Source: [$SRC_FILE](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/main/$SRC_FILE)" >> "$WIKI_DIR/$DEST_PAGE.md"
+            # Read the footer template
+            FOOTER_TEMPLATE=$(cat .github/wiki/footer.md)
+            
+            # Replace placeholders in footer
+            CURRENT_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+            SOURCE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/main/$SRC_FILE"
+            
+            # Apply replacements
+            FOOTER="${FOOTER_TEMPLATE/\{\{LAST_UPDATED\}\}/$CURRENT_DATE}"
+            FOOTER="${FOOTER/\{\{SOURCE_FILE\}\}/$SRC_FILE}"
+            FOOTER="${FOOTER/\{\{SOURCE_URL\}\}/$SOURCE_URL}"
+            
+            # Add footer to the wiki page 
+            echo -e "\n$FOOTER" >> "$WIKI_DIR/$DEST_PAGE.md"
             
             # Track processed files
             echo "$DEST_PAGE" >> "$WIKI_DIR/.processed_pages"
@@ -160,13 +196,13 @@ jobs:
           # Process files based on configuration and inputs
           if [ "$FORCE_UPDATE" == "true" ]; then
             # Process all files in mapping
-            while IFS= read -r line; do
-              if [[ $line =~ \"([^\"]+)\":\ \"([^\"]+)\" ]]; then
+            while IFS=: read -r line; do
+              if [[ $line =~ \"([^\"]+)\":\s*\"([^\"]+)\" ]]; then
                 SRC="${BASH_REMATCH[1]}"
                 DEST="${BASH_REMATCH[2]}"
                 process_file "$SRC" "$DEST"
               fi
-            done < <(grep -E '"[^"]+":\s+"[^"]+"' .github/wiki/page-mapping.yml)
+            done < <(grep -E '"[^"]+":\s*"[^"]+"' .github/wiki/page-mapping.yml)
           elif [ ! -z "$SPECIFIC_FILES" ]; then
             # Process only specified files
             IFS=',' read -ra FILES <<< "$SPECIFIC_FILES"
@@ -197,11 +233,12 @@ jobs:
           # Process the sidebar configuration
           if [ -f .github/wiki/sidebar.yml ]; then
             cp .github/wiki/sidebar.yml "$WIKI_DIR/_Sidebar.yml"
+            
             # Create a Markdown version of the sidebar
             echo "# Navigation" > "$WIKI_DIR/_Sidebar.md"
             echo "" >> "$WIKI_DIR/_Sidebar.md"
             
-            # Process sidebar YAML to Markdown (simplified)
+            # Process sidebar YAML to Markdown with nested navigation
             python -c '
 import yaml
 import sys
@@ -210,9 +247,9 @@ def process_item(item, level=0):
     result = []
     indent = "  " * level
     if "title" in item and "page" in item:
-        result.append(f"{indent}* [[{item['page']}|{item['title']}]]")
+        result.append(f"{indent}* [[{item[\"title\"]}|{item[\"page\"]}]]")
     elif "title" in item:
-        result.append(f"{indent}* **{item['title']}**")
+        result.append(f"{indent}* **{item[\"title\"]}**")
     
     if "children" in item:
         for child in item["children"]:
@@ -221,7 +258,7 @@ def process_item(item, level=0):
     return result
 
 try:
-    with open("'$WIKI_DIR'/_Sidebar.yml", "r") as f:
+    with open("'"$WIKI_DIR"'/_Sidebar.yml", "r") as f:
         sidebar = yaml.safe_load(f)
     
     if "sidebar" in sidebar and isinstance(sidebar["sidebar"], list):
@@ -229,7 +266,7 @@ try:
         for item in sidebar["sidebar"]:
             lines.extend(process_item(item))
         
-        with open("'$WIKI_DIR'/_Sidebar.md", "a") as f:
+        with open("'"$WIKI_DIR"'/_Sidebar.md", "a") as f:
             f.write("\n".join(lines))
         print("Sidebar navigation generated successfully")
     else:
@@ -241,7 +278,33 @@ except Exception as e:
 '
           fi
           
+          # Create _Footer.md
+          cp .github/wiki/footer.md "$WIKI_DIR/_Footer.md"
+          # Replace placeholders with general values
+          sed -i "s/{{LAST_UPDATED}}/$(date -u '+%Y-%m-%d')/g" "$WIKI_DIR/_Footer.md"
+          sed -i "s|{{SOURCE_FILE}}|.github/wiki/footer.md|g" "$WIKI_DIR/_Footer.md"
+          sed -i "s|{{SOURCE_URL}}|${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/main/.github/wiki/footer.md|g" "$WIKI_DIR/_Footer.md"
+          
           echo "PROCESSED=true" >> $GITHUB_OUTPUT
+
+      - name: Verify Internal Links
+        if: github.event.inputs.verify_links != 'false'
+        run: |
+          WIKI_DIR="${{ steps.wiki-repo.outputs.WIKI_DIR }}"
+          
+          echo "Verifying internal links in wiki pages"
+          
+          find "$WIKI_DIR" -name "*.md" -type f | while read -r file; do
+            echo "Checking links in $(basename "$file")"
+            markdown-link-check --quiet --config '{
+              "ignorePatterns": [
+                { "pattern": "^http" },
+                { "pattern": "^https" },
+                { "pattern": "^ftp" },
+                { "pattern": "^mailto" }
+              ]
+            }' "$file" || echo "Warning: Some internal links may be broken in $(basename "$file")"
+          done
 
       - name: Commit Changes to Wiki
         id: commit-wiki
@@ -264,6 +327,7 @@ except Exception as e:
             fi
             
             echo "CHANGES_PUSHED=true" >> $GITHUB_OUTPUT
+            echo "Wiki updated successfully! 📚"
           else
             echo "No changes to commit to wiki"
             echo "CHANGES_PUSHED=false" >> $GITHUB_OUTPUT

@@ -15,14 +15,20 @@ sidebar:
         page: CLI-Architecture
       - title: API Design
         page: API-Design
+      - title: CI/CD Pipeline
+        page: CI-CD-Pipeline
   - title: Features
     children:
-      - title: Entity Extraction Design
-        page: Entity-Extraction-Design
-      - title: Entity Extraction Usage Guide
-        page: Entity-Extraction-Usage-Guide
-      - title: MCP Server Guide
+      - title: Entity Extraction
+        children:
+          - title: Design
+            page: Entity-Extraction-Design
+          - title: Usage Guide
+            page: Entity-Extraction-Usage-Guide
+      - title: MCP Server
         page: MCP-Server-Guide
+      - title: Custom Commands
+        page: Custom-Commands
   - title: Development
     children:
       - title: Error Handling
@@ -33,5 +39,13 @@ sidebar:
         page: Structured-Logging
       - title: Performance Profiling
         page: Performance-Profiling
+  - title: Operations
+    children:
+      - title: Parallel Processing Guide
+        page: Parallel-Processing-Guide
+  - title: Contributing
+    children:
       - title: Wiki Contribution Guide
         page: Wiki-Contribution-Guide
+      - title: Wiki Setup Guide
+        page: Wiki-Setup-Guide
