@@ -1,0 +1,137 @@
+name: Dependency Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    # Ignore doc-only PRs
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/*.md'
+  schedule:
+    # Run weekly on Sunday at 00:00 UTC
+    - cron: '0 0 * * 0'
+
+jobs:
+  dependency-review:
+    name: Review Dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+      
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Review dependencies
+        uses: actions/dependency-review-action@v3
+        with:
+          fail-on-severity: high
+          vulnerability-check: true
+      
+      - name: Run npm audit
+        id: npm_audit
+        run: |
+          AUDIT_OUTPUT=$(npm audit --json || true)
+          echo "$AUDIT_OUTPUT" > npm_audit_report.json
+          
+          # Check for vulnerabilities
+          VULNERABILITIES=$(echo "$AUDIT_OUTPUT" | jq -r '.vulnerabilities | length')
+          HIGH_VULNERABILITIES=$(echo "$AUDIT_OUTPUT" | jq -r '.vulnerabilities[] | select(.severity == "high" or .severity == "critical") | .name' | wc -l)
+          
+          echo "vulnerabilities=$VULNERABILITIES" >> $GITHUB_OUTPUT
+          echo "high_vulnerabilities=$HIGH_VULNERABILITIES" >> $GITHUB_OUTPUT
+          
+          echo "Found $VULNERABILITIES total vulnerabilities, $HIGH_VULNERABILITIES high or critical"
+      
+      - name: Generate dependency report
+        id: generate_report
+        run: |
+          # Generate a simple dependency report
+          mkdir -p reports
+          
+          echo "# Dependency Report" > reports/dependency_report.md
+          echo "Generated on: $(date)" >> reports/dependency_report.md
+          echo "" >> reports/dependency_report.md
+          
+          echo "## Summary" >> reports/dependency_report.md
+          echo "- Direct dependencies: $(npm ls --json --depth=0 | jq -r '.dependencies | length')" >> reports/dependency_report.md
+          echo "- Total vulnerabilities: ${{ steps.npm_audit.outputs.vulnerabilities }}" >> reports/dependency_report.md
+          echo "- High/Critical vulnerabilities: ${{ steps.npm_audit.outputs.high_vulnerabilities }}" >> reports/dependency_report.md
+          echo "" >> reports/dependency_report.md
+          
+          echo "## Direct Dependencies" >> reports/dependency_report.md
+          echo "" >> reports/dependency_report.md
+          npm ls --json --depth=0 | jq -r '.dependencies | to_entries[] | "- " + .key + ": " + .value.version' >> reports/dependency_report.md
+          echo "" >> reports/dependency_report.md
+          
+          echo "## Outdated Packages" >> reports/dependency_report.md
+          echo "" >> reports/dependency_report.md
+          npm outdated --json | jq -r 'to_entries[] | "- " + .key + ": current: " + .value.current + ", latest: " + .value.latest' >> reports/dependency_report.md || echo "No outdated packages found." >> reports/dependency_report.md
+          
+          cat reports/dependency_report.md
+      
+      - name: Upload dependency report
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-reports
+          path: |
+            reports/dependency_report.md
+            npm_audit_report.json
+      
+      - name: Create issue for vulnerabilities
+        if: ${{ steps.npm_audit.outputs.high_vulnerabilities > 0 && github.event_name == 'schedule' }}
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VULNERABILITIES: ${{ steps.npm_audit.outputs.vulnerabilities }}
+          HIGH_VULNERABILITIES: ${{ steps.npm_audit.outputs.high_vulnerabilities }}
+        with:
+          filename: .github/ISSUE_TEMPLATE/vulnerabilities.md
+          update_existing: true
+          search_existing: open
+          labels: security,dependencies,needs-triage
+          assignees: DrunkOnJava
+      
+      - name: Comment on PR with vulnerability report
+        if: ${{ github.event_name == 'pull_request' && steps.npm_audit.outputs.vulnerabilities > 0 }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const dependencyReport = fs.readFileSync('reports/dependency_report.md', 'utf8');
+            
+            const highVulns = ${{ steps.npm_audit.outputs.high_vulnerabilities }};
+            const totalVulns = ${{ steps.npm_audit.outputs.vulnerabilities }};
+            
+            let comment = `## 📦 Dependency Review Results\n\n`;
+            
+            if (highVulns > 0) {
+              comment += `⚠️ **Warning:** This PR introduces ${highVulns} high or critical severity vulnerabilities!\n\n`;
+            } else if (totalVulns > 0) {
+              comment += `⚠️ **Notice:** This PR introduces ${totalVulns} vulnerabilities of low or moderate severity.\n\n`;
+            } else {
+              comment += `✅ **Success:** No vulnerabilities found in added dependencies.\n\n`;
+            }
+            
+            comment += `<details><summary>View full dependency report</summary>\n\n`;
+            comment += dependencyReport;
+            comment += `\n</details>`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

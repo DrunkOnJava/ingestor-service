@@ -1,0 +1,235 @@
+name: Project Board Automation
+
+on:
+  issues:
+    types: [opened, reopened, closed, labeled, unlabeled, assigned, unassigned]
+  pull_request:
+    types: [opened, reopened, closed, converted_to_draft, ready_for_review, review_requested]
+
+jobs:
+  project-automation:
+    runs-on: ubuntu-latest
+    name: Manage Project Board
+    steps:
+      - name: Add to project
+        id: add-to-project
+        uses: actions/github-script@v6
+        env:
+          PROJECT_ID: ${{ vars.PROJECT_ID }}
+          GITHUB_TOKEN: ${{ secrets.PROJECT_ACCESS_TOKEN }}
+        with:
+          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const projectId = process.env.PROJECT_ID;
+            if (!projectId) {
+              console.log("No project ID specified. Skipping automation.");
+              return;
+            }
+            
+            const event = context.payload;
+            const itemType = context.eventName === 'issues' ? 'ISSUE' : 'PULL_REQUEST';
+            const itemId = context.eventName === 'issues' ? event.issue.node_id : event.pull_request.node_id;
+            
+            // Add item to project if it's new
+            if (event.action === 'opened') {
+              try {
+                const addItemMutation = `
+                mutation {
+                  addProjectV2ItemById(input: {
+                    projectId: "${projectId}"
+                    contentId: "${itemId}"
+                  }) {
+                    item {
+                      id
+                    }
+                  }
+                }`;
+                
+                const response = await github.graphql(addItemMutation);
+                console.log(`Added item to project: ${response.addProjectV2ItemById.item.id}`);
+                
+                // Set status based on type
+                if (response.addProjectV2ItemById.item.id) {
+                  await updateItemStatus(projectId, response.addProjectV2ItemById.item.id);
+                }
+              } catch (error) {
+                console.error(`Error adding item to project: ${error}`);
+              }
+            }
+            
+            // Update item status based on events
+            async function updateItemStatus(projectId, itemId) {
+              try {
+                // Get project fields to find status field
+                const projectQuery = `
+                query {
+                  node(id: "${projectId}") {
+                    ... on ProjectV2 {
+                      fields(first: 20) {
+                        nodes {
+                          ... on ProjectV2Field {
+                            id
+                            name
+                          }
+                          ... on ProjectV2SingleSelectField {
+                            id
+                            name
+                            options {
+                              id
+                              name
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }`;
+                
+                const projectData = await github.graphql(projectQuery);
+                
+                // Find the status field
+                const statusField = projectData.node.fields.nodes.find(field => 
+                  field.name.toLowerCase() === 'status');
+                
+                if (!statusField) {
+                  console.log("No status field found in project");
+                  return;
+                }
+                
+                // Determine appropriate status option
+                let statusOptionId;
+                if (context.eventName === 'issues') {
+                  if (event.action === 'opened' || event.action === 'reopened') {
+                    statusOptionId = statusField.options.find(option => 
+                      option.name.toLowerCase() === 'todo' || 
+                      option.name.toLowerCase() === 'backlog')?.id;
+                  } else if (event.action === 'closed') {
+                    statusOptionId = statusField.options.find(option => 
+                      option.name.toLowerCase() === 'done')?.id;
+                  } else if (event.action === 'assigned') {
+                    statusOptionId = statusField.options.find(option => 
+                      option.name.toLowerCase() === 'in progress')?.id;
+                  }
+                } else if (context.eventName === 'pull_request') {
+                  if (event.action === 'opened' || event.action === 'reopened' || event.action === 'ready_for_review') {
+                    statusOptionId = statusField.options.find(option => 
+                      option.name.toLowerCase() === 'in review')?.id;
+                  } else if (event.action === 'closed' && event.pull_request.merged) {
+                    statusOptionId = statusField.options.find(option => 
+                      option.name.toLowerCase() === 'done')?.id;
+                  } else if (event.action === 'converted_to_draft') {
+                    statusOptionId = statusField.options.find(option => 
+                      option.name.toLowerCase() === 'in progress')?.id;
+                  }
+                }
+                
+                if (statusOptionId) {
+                  // Update status
+                  const updateMutation = `
+                  mutation {
+                    updateProjectV2ItemFieldValue(input: {
+                      projectId: "${projectId}"
+                      itemId: "${itemId}"
+                      fieldId: "${statusField.id}"
+                      value: { 
+                        singleSelectOptionId: "${statusOptionId}"
+                      }
+                    }) {
+                      projectV2Item {
+                        id
+                      }
+                    }
+                  }`;
+                  
+                  await github.graphql(updateMutation);
+                  console.log(`Updated item status in project`);
+                }
+              } catch (error) {
+                console.error(`Error updating item status: ${error}`);
+              }
+            }
+            
+            // Handle existing items for status updates
+            if (event.action !== 'opened') {
+              try {
+                // Find the item in the project
+                const findItemQuery = `
+                query {
+                  node(id: "${projectId}") {
+                    ... on ProjectV2 {
+                      items(first: 100) {
+                        nodes {
+                          id
+                          content {
+                            ... on Issue {
+                              id
+                              number
+                            }
+                            ... on PullRequest {
+                              id
+                              number
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }`;
+                
+                const projectItems = await github.graphql(findItemQuery);
+                const itemNumber = context.eventName === 'issues' ? 
+                  event.issue.number : event.pull_request.number;
+                
+                const foundItem = projectItems.node.items.nodes.find(item => 
+                  item.content && item.content.number === itemNumber);
+                
+                if (foundItem) {
+                  await updateItemStatus(projectId, foundItem.id);
+                } else {
+                  console.log(`Item #${itemNumber} not found in project`);
+                }
+              } catch (error) {
+                console.error(`Error finding item in project: ${error}`);
+              }
+            }
+      
+      - name: Auto-assign issues based on labels
+        if: |
+          github.event_name == 'issues' && 
+          (github.event.action == 'opened' || github.event.action == 'labeled') && 
+          github.event.issue.assignees.length == 0
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            
+            // Define label to assignee mapping
+            const labelAssignees = {
+              'bug': 'DrunkOnJava',
+              'ci-failure': 'DrunkOnJava',
+              'build-failure': 'DrunkOnJava',
+              'security': 'DrunkOnJava',
+              'documentation': 'DrunkOnJava',
+              'performance': 'DrunkOnJava',
+              'enhancement': 'DrunkOnJava'
+            };
+            
+            // Find the first matching label that has an assignee
+            let assignee = null;
+            for (const label of issue.labels) {
+              if (labelAssignees[label.name]) {
+                assignee = labelAssignees[label.name];
+                break;
+              }
+            }
+            
+            if (assignee) {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                assignees: [assignee]
+              });
+              console.log(`Assigned issue #${issue.number} to ${assignee} based on labels`);
+            }

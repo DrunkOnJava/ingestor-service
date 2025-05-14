@@ -1,0 +1,43 @@
+# CODEOWNERS file
+#
+# This file defines automatic assignment of code reviews
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# The order matters: the last matching pattern has the most precedence.
+
+# Default owners for everything
+* @DrunkOnJava
+
+# Core components
+/src/core/ @DrunkOnJava
+/src/core/entity/ @DrunkOnJava
+/src/core/content/ @DrunkOnJava
+/src/core/database/ @DrunkOnJava
+
+# Parallel processing specialists
+/src/core/content/BatchWorker.ts @DrunkOnJava
+/src/core/content/ParallelBatchProcessor.ts @DrunkOnJava
+/src/core/content/BatchProcessor.ts @DrunkOnJava
+
+# API and MCP components
+/src/api/ @DrunkOnJava
+/src/api/mcp/ @DrunkOnJava
+
+# CLI components
+/src/cli/ @DrunkOnJava
+
+# Documentation
+/docs/ @DrunkOnJava
+*.md @DrunkOnJava
+
+# Testing infrastructure
+/tests/ @DrunkOnJava
+/scripts/run_tests.sh @DrunkOnJava
+/jest.config.js @DrunkOnJava
+
+# CI/CD Configuration
+/.github/ @DrunkOnJava
+/scripts/ci/ @DrunkOnJava
+
+# Database components
+/config/schemas/ @DrunkOnJava

@@ -1,0 +1,216 @@
+name: Create Release
+
+on:
+  push:
+    branches: [ main ]
+    # Only run when commit message contains chore(release): vX.Y.Z
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/*.md'
+
+jobs:
+  prepare-release:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, 'chore(release):')
+    outputs:
+      version: ${{ steps.extract-version.outputs.version }}
+      created: ${{ steps.check-existing.outputs.created }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Extract version from commit message
+        id: extract-version
+        run: |
+          VERSION=$(echo "${{ github.event.head_commit.message }}" | grep -oP 'chore\(release\): v\K[0-9]+\.[0-9]+\.[0-9]+')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Check if release already exists
+        id: check-existing
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                       "https://api.github.com/repos/${{ github.repository }}/releases/tags/v${{ steps.extract-version.outputs.version }}")
+          if [[ "$HTTP_STATUS" == "200" ]]; then
+            echo "Release already exists. Skipping creation."
+            echo "created=false" >> $GITHUB_OUTPUT
+          else
+            echo "Release doesn't exist. Will create."
+            echo "created=true" >> $GITHUB_OUTPUT
+          fi
+
+  build-for-release:
+    name: Build release artifacts
+    needs: prepare-release
+    if: needs.prepare-release.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build project
+        run: npm run build
+      
+      - name: Create package
+        run: |
+          mkdir -p dist/package
+          cp -r dist/* dist/package/ 2>/dev/null || :
+          cp package.json package-lock.json README.md LICENSE dist/package/
+          cd dist/package && npm ci --only=production
+          cd ../..
+          
+          # Create release artifacts
+          RELEASE_VERSION="${{ needs.prepare-release.outputs.version }}"
+          echo "Release: v$RELEASE_VERSION" > dist/package/RELEASE_INFO
+          echo "Commit: ${{ github.sha }}" >> dist/package/RELEASE_INFO
+          echo "Release Date: $(date)" >> dist/package/RELEASE_INFO
+          
+          # Create tarball and zip archives
+          tar -czf "ingestor-system-v$RELEASE_VERSION.tar.gz" -C dist/package .
+          
+          # Create a zip archive for Windows users
+          cd dist/package && zip -r "../../ingestor-system-v$RELEASE_VERSION.zip" . && cd ../..
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-artifacts
+          path: |
+            ingestor-system-v${{ needs.prepare-release.outputs.version }}.tar.gz
+            ingestor-system-v${{ needs.prepare-release.outputs.version }}.zip
+            dist/package/RELEASE_INFO
+          retention-days: 7
+
+  create-github-release:
+    name: Create GitHub Release
+    needs: [prepare-release, build-for-release]
+    if: needs.prepare-release.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Download release artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: release-artifacts
+          path: release-artifacts
+      
+      - name: Generate changelog
+        id: generate_changelog
+        run: |
+          # Extract changes since last release tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [[ -z "$LAST_TAG" ]]; then
+            # No previous tag, get all commits
+            CHANGES=$(git log --pretty=format:"* %s (%h)" --no-merges | grep -v 'chore(release):')
+          else
+            # Get commits since last tag
+            CHANGES=$(git log $LAST_TAG..HEAD --pretty=format:"* %s (%h)" --no-merges | grep -v 'chore(release):')
+          fi
+          
+          # Create changelog content
+          echo "## Changes in this release" > changelog.md
+          echo "" >> changelog.md
+          
+          if [[ -z "$CHANGES" ]]; then
+            echo "No significant changes detected since last release." >> changelog.md
+          else
+            echo "$CHANGES" >> changelog.md
+          fi
+          
+          echo "" >> changelog.md
+          echo "## Installation" >> changelog.md
+          echo "" >> changelog.md
+          echo "### NPM" >> changelog.md
+          echo "```bash" >> changelog.md
+          echo "npm install ingestor-system" >> changelog.md
+          echo "```" >> changelog.md
+          echo "" >> changelog.md
+          echo "### Manual Installation" >> changelog.md
+          echo "1. Download the appropriate archive for your system" >> changelog.md
+          echo "2. Extract the archive to your desired location" >> changelog.md
+          echo "3. Run \`npm link\` in the extracted directory to make the CLI available globally" >> changelog.md
+          
+          cat changelog.md
+          
+          # Make changelog available to the next step
+          cat changelog.md > release_changelog.txt
+      
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.prepare-release.outputs.version }}
+          name: Release v${{ needs.prepare-release.outputs.version }}
+          body_path: release_changelog.txt
+          draft: false
+          prerelease: false
+          files: |
+            release-artifacts/ingestor-system-v${{ needs.prepare-release.outputs.version }}.tar.gz
+            release-artifacts/ingestor-system-v${{ needs.prepare-release.outputs.version }}.zip
+
+  notify-release:
+    name: Notify release
+    needs: [prepare-release, create-github-release]
+    if: needs.prepare-release.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Notify Slack about release
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "🚀 New Release: v${{ needs.prepare-release.outputs.version }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*New version released:* v${{ needs.prepare-release.outputs.version }}\n*Released by:* ${{ github.actor }}"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Release"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.prepare-release.outputs.version }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        continue-on-error: true

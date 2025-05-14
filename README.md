@@ -3,6 +3,8 @@
 A modular TypeScript system for content ingestion, entity extraction, and database storage with Claude AI integration.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI Status](https://github.com/DrunkOnJava/ingestor-service/actions/workflows/main-ci.yml/badge.svg)](https://github.com/DrunkOnJava/ingestor-service/actions/workflows/main-ci.yml)
+[![Dependency Review](https://github.com/DrunkOnJava/ingestor-service/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/DrunkOnJava/ingestor-service/actions/workflows/dependency-review.yml)
 
 ## Overview
 

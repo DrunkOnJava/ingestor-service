@@ -1,0 +1,534 @@
+name: Ingestor System CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/*.md'
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/*.md'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to run tests against'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      debug_enabled:
+        description: 'Run the workflow with debug logging'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NODE_VERSION: '16'
+  CACHE_KEY_PREFIX: 'ingestor-v1'
+  ARTIFACT_RETENTION_DAYS: 30
+  DEFAULT_ASSIGNEE: 'DrunkOnJava'
+  ISSUE_LABELS: 'bug,ci-failure,needs-triage'
+
+# Define job outputs at workflow level for cross-job communication
+jobs:
+  setup:
+    name: Setup and Initial Checks
+    runs-on: ubuntu-latest
+    outputs:
+      build_id: ${{ steps.generate_build_id.outputs.build_id }}
+      cache_key: ${{ steps.generate_cache_key.outputs.cache_key }}
+      should_create_release: ${{ steps.check_release.outputs.should_create_release }}
+      release_tag: ${{ steps.check_release.outputs.release_tag }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      
+      - name: Generate unique build ID
+        id: generate_build_id
+        run: |
+          BUILD_ID="build-$(date +'%Y%m%d%H%M%S')-${{ github.run_number }}-${GITHUB_SHA::8}"
+          echo "build_id=$BUILD_ID" >> $GITHUB_OUTPUT
+          echo "Generated Build ID: $BUILD_ID"
+      
+      - name: Generate cache key
+        id: generate_cache_key
+        run: |
+          CACHE_HASH=$(find package.json package-lock.json -type f -exec md5sum {} \; | sort | md5sum | cut -d' ' -f1)
+          CACHE_KEY="${{ env.CACHE_KEY_PREFIX }}-${CACHE_HASH}"
+          echo "cache_key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          echo "Generated Cache Key: $CACHE_KEY"
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Check for release
+        id: check_release
+        run: |
+          # Check if commit message contains release tag indicator
+          if [[ "${{ github.event_name }}" == "push" && "${{ contains(github.event.head_commit.message, 'chore(release):') }}" == "true" ]]; then
+            echo "should_create_release=true" >> $GITHUB_OUTPUT
+            VERSION=$(echo "${{ github.event.head_commit.message }}" | grep -oP 'chore\(release\): v\K[0-9]+\.[0-9]+\.[0-9]+')
+            echo "release_tag=v$VERSION" >> $GITHUB_OUTPUT
+            echo "Release version detected: v$VERSION"
+          else
+            echo "should_create_release=false" >> $GITHUB_OUTPUT
+            echo "No release version detected"
+          fi
+      
+      - name: Validate package.json
+        run: npx package-json-validator package.json
+      
+      - name: Check for security vulnerabilities
+        run: npm audit --production
+        continue-on-error: true  # Don't fail the build, just record results
+
+  lint:
+    name: Code Style and Linting
+    needs: [setup]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run ESLint
+        id: eslint
+        run: npm run lint
+        continue-on-error: true  # Don't fail the build, collect failures for reporting
+      
+      - name: Run Prettier check
+        id: prettier
+        run: npx prettier --check "src/**/*.{ts,tsx,js,jsx,json}"
+        continue-on-error: true  # Don't fail the build, collect failures for reporting
+      
+      - name: Check TypeScript compilation
+        id: typescript
+        run: npm run typecheck
+        continue-on-error: true  # Don't fail the build, collect failures for reporting
+      
+      - name: Determine job status
+        id: job_status
+        run: |
+          if [[ "${{ steps.eslint.outcome }}" == "failure" || \
+                "${{ steps.prettier.outcome }}" == "failure" || \
+                "${{ steps.typescript.outcome }}" == "failure" ]]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "::error::One or more code quality checks failed."
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Create issue on lint failure
+        if: steps.job_status.outputs.status == 'failure' && github.event_name == 'push'
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ESLINT_STATUS: ${{ steps.eslint.outcome }}
+          PRETTIER_STATUS: ${{ steps.prettier.outcome }}
+          TS_STATUS: ${{ steps.typescript.outcome }}
+          COMMIT_SHA: ${{ github.sha }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          filename: .github/ISSUE_TEMPLATE/lint-failure.md
+          update_existing: true
+          search_existing: open
+      
+      - name: Fail if checks failed
+        if: steps.job_status.outputs.status == 'failure'
+        run: exit 1
+
+  build:
+    name: Build and Package
+    needs: [setup]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      
+      - name: Cache build dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ needs.setup.outputs.cache_key }}
+          restore-keys: |
+            ${{ env.CACHE_KEY_PREFIX }}-
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build project
+        id: build
+        run: |
+          echo "Building project with build ID: ${{ needs.setup.outputs.build_id }}"
+          npm run build
+      
+      - name: Package application
+        run: |
+          mkdir -p dist/package
+          cp -r dist/* dist/package/ 2>/dev/null || :
+          cp package.json package-lock.json dist/package/
+          cd dist/package && npm ci --only=production
+          cd ../..
+          echo "Build ID: ${{ needs.setup.outputs.build_id }}" > dist/package/BUILD_INFO
+          echo "Commit: ${{ github.sha }}" >> dist/package/BUILD_INFO
+          echo "Build Date: $(date)" >> dist/package/BUILD_INFO
+          
+          # Create a tarball
+          tar -czf "ingestor-system-${{ needs.setup.outputs.build_id }}.tar.gz" -C dist/package .
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: |
+            ingestor-system-${{ needs.setup.outputs.build_id }}.tar.gz
+            dist/package/BUILD_INFO
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+      
+      - name: Create issue on build failure
+        if: failure() && github.event_name == 'push'
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_ID: ${{ needs.setup.outputs.build_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          filename: .github/ISSUE_TEMPLATE/build-failure.md
+          update_existing: true
+          search_existing: open
+          labels: ${{ env.ISSUE_LABELS }}
+          assignees: ${{ env.DEFAULT_ASSIGNEE }}
+
+  test:
+    name: Testing
+    needs: [setup, build]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test-group: ['unit', 'integration', 'performance']
+        node-version: ['16']
+      fail-fast: false  # Continue with other test groups if one fails
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+      
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ needs.setup.outputs.cache_key }}-${{ matrix.node-version }}
+          restore-keys: |
+            ${{ env.CACHE_KEY_PREFIX }}-${{ matrix.node-version }}-
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run tests
+        id: run_tests
+        run: |
+          case "${{ matrix.test-group }}" in
+            "unit")
+              npm run test:unit
+              ;;
+            "integration")
+              npm run test:integration
+              ;;
+            "performance")
+              npm run test:performance
+              ;;
+            *)
+              echo "Unknown test group: ${{ matrix.test-group }}"
+              exit 1
+              ;;
+          esac
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results-${{ matrix.test-group }}
+          path: |
+            test-results/
+            coverage/
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+      
+      - name: Create issue on test failure
+        if: failure() && github.event_name == 'push'
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_GROUP: ${{ matrix.test-group }}
+          NODE_VERSION: ${{ matrix.node-version }}
+          COMMIT_SHA: ${{ github.sha }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          filename: .github/ISSUE_TEMPLATE/test-failure.md
+          update_existing: true
+          search_existing: open
+          labels: ${{ env.ISSUE_LABELS }}
+          assignees: ${{ env.DEFAULT_ASSIGNEE }}
+
+  analyze-results:
+    name: Analyze Results
+    needs: [setup, lint, build, test]
+    runs-on: ubuntu-latest
+    if: always()  # Run even if previous jobs failed
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+      
+      - name: Analyze test results
+        id: test_analysis
+        run: |
+          echo "Analyzing test results..."
+          
+          # Check if test result directories exist
+          if [ -d "artifacts/test-results-unit" ]; then
+            UNIT_TESTS_FAILED=$(cat artifacts/test-results-unit/junit.xml | grep -c '<failure')
+            echo "Unit test failures: $UNIT_TESTS_FAILED"
+            echo "unit_test_failures=$UNIT_TESTS_FAILED" >> $GITHUB_OUTPUT
+          else
+            echo "No unit test results found"
+            echo "unit_test_failures=0" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ -d "artifacts/test-results-integration" ]; then
+            INTEGRATION_TESTS_FAILED=$(cat artifacts/test-results-integration/junit.xml | grep -c '<failure')
+            echo "Integration test failures: $INTEGRATION_TESTS_FAILED"
+            echo "integration_test_failures=$INTEGRATION_TESTS_FAILED" >> $GITHUB_OUTPUT
+          else
+            echo "No integration test results found"
+            echo "integration_test_failures=0" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ -d "artifacts/test-results-performance" ]; then
+            PERFORMANCE_TESTS_FAILED=$(cat artifacts/test-results-performance/junit.xml | grep -c '<failure')
+            echo "Performance test failures: $PERFORMANCE_TESTS_FAILED"
+            echo "performance_test_failures=$PERFORMANCE_TESTS_FAILED" >> $GITHUB_OUTPUT
+          else
+            echo "No performance test results found"
+            echo "performance_test_failures=0" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check if any tests failed
+          TOTAL_FAILURES=$((UNIT_TESTS_FAILED + INTEGRATION_TESTS_FAILED + PERFORMANCE_TESTS_FAILED))
+          if [ $TOTAL_FAILURES -gt 0 ]; then
+            echo "tests_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "tests_failed=false" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+      
+      - name: Analyze coverage
+        id: coverage_analysis
+        run: |
+          echo "Analyzing coverage..."
+          
+          if [ -d "artifacts/test-results-unit/coverage" ]; then
+            COVERAGE=$(cat artifacts/test-results-unit/coverage/coverage-summary.json | jq -r '.total.lines.pct')
+            echo "Line coverage: $COVERAGE%"
+            
+            if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+              echo "coverage_threshold_met=false" >> $GITHUB_OUTPUT
+              echo "Coverage below threshold: $COVERAGE% < 80%"
+            else
+              echo "coverage_threshold_met=true" >> $GITHUB_OUTPUT
+              echo "Coverage meets threshold: $COVERAGE% >= 80%"
+            fi
+            
+            echo "coverage_percentage=$COVERAGE" >> $GITHUB_OUTPUT
+          else
+            echo "No coverage data found"
+            echo "coverage_threshold_met=false" >> $GITHUB_OUTPUT
+            echo "coverage_percentage=0" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+      
+      - name: Generate summary report
+        run: |
+          echo "## Workflow Summary Report" > $GITHUB_STEP_SUMMARY
+          echo "Build ID: ${{ needs.setup.outputs.build_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Add test results to summary
+          echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Group | Status | Failures |" >> $GITHUB_STEP_SUMMARY
+          echo "| --- | --- | --- |" >> $GITHUB_STEP_SUMMARY
+          
+          UNIT_STATUS="${{ needs.test.result == 'success' && 'Passing' || 'Failing' }}"
+          UNIT_FAILURES="${{ steps.test_analysis.outputs.unit_test_failures || 'N/A' }}"
+          echo "| Unit Tests | $UNIT_STATUS | $UNIT_FAILURES |" >> $GITHUB_STEP_SUMMARY
+          
+          INTEGRATION_STATUS="${{ needs.test.result == 'success' && 'Passing' || 'Failing' }}"
+          INTEGRATION_FAILURES="${{ steps.test_analysis.outputs.integration_test_failures || 'N/A' }}"
+          echo "| Integration Tests | $INTEGRATION_STATUS | $INTEGRATION_FAILURES |" >> $GITHUB_STEP_SUMMARY
+          
+          PERFORMANCE_STATUS="${{ needs.test.result == 'success' && 'Passing' || 'Failing' }}"
+          PERFORMANCE_FAILURES="${{ steps.test_analysis.outputs.performance_test_failures || 'N/A' }}"
+          echo "| Performance Tests | $PERFORMANCE_STATUS | $PERFORMANCE_FAILURES |" >> $GITHUB_STEP_SUMMARY
+          
+          # Add coverage to summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Code Coverage" >> $GITHUB_STEP_SUMMARY
+          COVERAGE="${{ steps.coverage_analysis.outputs.coverage_percentage || 'N/A' }}"
+          THRESHOLD_MET="${{ steps.coverage_analysis.outputs.coverage_threshold_met == 'true' && '✅ Met' || '❌ Not Met' }}"
+          echo "Line Coverage: $COVERAGE% (Threshold: 80%) $THRESHOLD_MET" >> $GITHUB_STEP_SUMMARY
+          
+          # Add build status
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Status" >> $GITHUB_STEP_SUMMARY
+          BUILD_STATUS="${{ needs.build.result == 'success' && '✅ Success' || '❌ Failed' }}"
+          echo "Build: $BUILD_STATUS" >> $GITHUB_STEP_SUMMARY
+          
+          # Add lint status
+          echo "" >> $GITHUB_STEP_SUMMARY  
+          echo "### Code Quality" >> $GITHUB_STEP_SUMMARY
+          LINT_STATUS="${{ needs.lint.result == 'success' && '✅ Passing' || '❌ Failed' }}"
+          echo "Linting & Style: $LINT_STATUS" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Create consolidated issue for failures
+        if: >-
+          (needs.lint.result == 'failure' || needs.build.result == 'failure' || 
+           needs.test.result == 'failure' || steps.test_analysis.outputs.tests_failed == 'true' ||
+           steps.coverage_analysis.outputs.coverage_threshold_met == 'false') && 
+          github.event_name == 'push'
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_ID: ${{ needs.setup.outputs.build_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LINT_STATUS: ${{ needs.lint.result }}
+          BUILD_STATUS: ${{ needs.build.result }}
+          TEST_STATUS: ${{ needs.test.result }}
+          COVERAGE: ${{ steps.coverage_analysis.outputs.coverage_percentage || 'N/A' }}
+          UNIT_FAILURES: ${{ steps.test_analysis.outputs.unit_test_failures || '0' }}
+          INTEGRATION_FAILURES: ${{ steps.test_analysis.outputs.integration_test_failures || '0' }}
+          PERFORMANCE_FAILURES: ${{ steps.test_analysis.outputs.performance_test_failures || '0' }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        with:
+          filename: .github/ISSUE_TEMPLATE/workflow-failure.md
+          update_existing: true
+          search_existing: open
+          labels: ${{ env.ISSUE_LABELS }},workflow-failure
+          assignees: ${{ env.DEFAULT_ASSIGNEE }}
+      
+      - name: Post workflow status to Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Ingestor System CI/CD Results"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Build ID:* ${{ needs.setup.outputs.build_id }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* ${{ github.sha }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status:* ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Build:* ${{ needs.build.result == 'success' && '✅ Success' || '❌ Failed' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Tests:* ${{ needs.test.result == 'success' && '✅ Passing' || '❌ Failed' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Code Quality:* ${{ needs.lint.result == 'success' && '✅ Passing' || '❌ Failed' }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        continue-on-error: true
