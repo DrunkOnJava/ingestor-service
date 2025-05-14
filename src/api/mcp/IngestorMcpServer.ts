@@ -4,12 +4,13 @@
  */
 
 import { Logger, LogLevel } from '../../core/logging';
-import { ContentProcessor, ContentTypeDetector } from '../../core/content';
+import { ContentProcessor, ContentTypeDetector, BatchProcessor } from '../../core/content';
 import { EntityManager } from '../../core/entity';
 import { DatabaseService } from '../../core/services';
 import { ClaudeService } from '../../core/services';
 import { FileSystem } from '../../core/utils';
 import { DatabaseInitializer } from '../../core/database';
+import { BatchProcessorTool } from './tools/BatchProcessorTool';
 import * as path from 'path';
 import * as http from 'http';
 
@@ -45,6 +46,8 @@ export class IngestorMcpServer {
   private contentProcessor?: ContentProcessor;
   private dbService?: DatabaseService;
   private httpServer?: http.Server;
+  private batchProcessorTool?: BatchProcessorTool;
+  private fs?: FileSystem;
   
   /**
    * Creates a new IngestorMcpServer instance
@@ -102,7 +105,7 @@ export class IngestorMcpServer {
   private initializeDependencies(): void {
     try {
       // Create file system utility
-      const fs = new FileSystem(
+      this.fs = new FileSystem(
         this.logger.createChildLogger('filesystem'),
         path.join(this.config.ingestorHome!, this.config.tempDir!)
       );
@@ -128,16 +131,24 @@ export class IngestorMcpServer {
       // Create content type detector
       const contentTypeDetector = new ContentTypeDetector(
         this.logger.createChildLogger('content-type'),
-        fs
+        this.fs
       );
       
       // Create content processor
       this.contentProcessor = new ContentProcessor(
         this.logger.createChildLogger('content'),
-        fs,
+        this.fs,
         claudeService,
         this.entityManager
       );
+      
+      // Create batch processor tool
+      this.batchProcessorTool = new BatchProcessorTool({
+        logger: this.logger.createChildLogger('batch-processor'),
+        fs: this.fs,
+        databaseService: this.dbService,
+        claudeService: claudeService
+      });
       
       this.logger.debug('Dependencies initialized');
     } catch (error) {
@@ -181,13 +192,13 @@ export class IngestorMcpServer {
           body += chunk.toString();
         });
         
-        req.on('end', () => {
+        req.on('end', async () => {
           try {
             // Parse request
             const request = JSON.parse(body);
             
-            // Process MCP request
-            const response = this.handleMcpRequest(request);
+            // Process MCP request (await the async result)
+            const response = await this.handleMcpRequest(request);
             
             // Send response
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -219,13 +230,13 @@ export class IngestorMcpServer {
       this.logger.info('Setting up stdio MCP transport');
       
       // Set up stdin handler
-      process.stdin.on('data', (data) => {
+      process.stdin.on('data', async (data) => {
         try {
           // Parse MCP request from stdin
           const request = JSON.parse(data.toString());
           
-          // Process MCP request
-          const response = this.handleMcpRequest(request);
+          // Process MCP request (await the async result)
+          const response = await this.handleMcpRequest(request);
           
           // Send response to stdout
           process.stdout.write(JSON.stringify(response) + '\n');
@@ -251,7 +262,7 @@ export class IngestorMcpServer {
    * @returns MCP response
    * @private
    */
-  private handleMcpRequest(request: any): any {
+  private async handleMcpRequest(request: any): Promise<any> {
     // This is a simplified placeholder - real implementation would handle the MCP protocol
     
     try {
@@ -260,7 +271,7 @@ export class IngestorMcpServer {
       // Handle different request types
       switch (request.type) {
         case 'tool':
-          return this.handleToolRequest(request);
+          return await this.handleToolRequest(request);
         case 'auth':
           return this.handleAuthRequest(request);
         case 'ping':
@@ -281,7 +292,7 @@ export class IngestorMcpServer {
    * @returns Tool response
    * @private
    */
-  private handleToolRequest(request: any): any {
+  private async handleToolRequest(request: any): Promise<any> {
     // This is a simplified placeholder - real implementation would handle specific tools
     
     try {
@@ -308,6 +319,8 @@ export class IngestorMcpServer {
           return this.handleProcessContent(params.database, params.content, params.contentType, params.options);
         case 'run_ingestor':
           return this.handleRunIngestor(params.command, params.args);
+        case 'batch_process':
+          return await this.handleBatchProcess(params);
         default:
           this.logger.warning(`Unknown tool: ${toolName}`);
           return { error: `Unknown tool: ${toolName}` };
@@ -315,6 +328,30 @@ export class IngestorMcpServer {
     } catch (error) {
       this.logger.error(`Error handling tool request: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return { error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+  
+  /**
+   * Handle batch process request
+   * @param params Batch process parameters
+   * @returns Batch process results
+   * @private
+   */
+  private async handleBatchProcess(params: any): Promise<any> {
+    try {
+      this.logger.info(`Handling batch process request for database: ${params.database}`);
+      
+      if (!this.batchProcessorTool) {
+        throw new Error('Batch processor tool is not initialized');
+      }
+      
+      // Execute batch processing
+      const result = await this.batchProcessorTool.execute(params);
+      
+      return result;
+    } catch (error) {
+      this.logger.error(`Error handling batch process request: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw error;
     }
   }
   

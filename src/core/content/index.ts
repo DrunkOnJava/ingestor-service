@@ -5,3 +5,4 @@
 
 export * from './ContentProcessor';
 export * from './ContentTypeDetector';
+export * from './BatchProcessor';
