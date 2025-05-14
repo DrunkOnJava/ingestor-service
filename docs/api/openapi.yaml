@@ -1,0 +1,2740 @@
+openapi: 3.0.3
+info:
+  title: Ingestor System API
+  description: |-
+    RESTful API for the Ingestor System that provides access to content processing,
+    entity extraction, and database capabilities using Claude AI.
+  version: 1.0.0
+  contact:
+    email: support@example.com
+  license:
+    name: Apache 2.0
+    url: 'http://www.apache.org/licenses/LICENSE-2.0.html'
+
+servers:
+  - url: 'http://localhost:3000/api/v1'
+    description: Local development server
+
+tags:
+  - name: auth
+    description: Authentication and user management
+  - name: content
+    description: Content management and processing
+  - name: entities
+    description: Entity extraction and management
+  - name: batch
+    description: Batch processing operations
+  - name: system
+    description: System information and configuration
+
+paths:
+  #
+  # Authentication Endpoints
+  #
+  /auth/login:
+    post:
+      tags:
+        - auth
+      summary: Authenticate user and get token
+      description: Authenticates a user and returns a JWT token for API access
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                  example: admin
+                password:
+                  type: string
+                  example: password
+      responses:
+        '200':
+          description: Successful authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security: []
+  
+  /auth/register:
+    post:
+      tags:
+        - auth
+      summary: Register a new user
+      description: Creates a new user account
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                  example: newuser
+                password:
+                  type: string
+                  example: securepassword
+                role:
+                  type: string
+                  enum: [user, admin]
+                  default: user
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Username already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /auth/me:
+    get:
+      tags:
+        - auth
+      summary: Get current user info
+      description: Returns information about the authenticated user
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: User information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /auth/change-password:
+    post:
+      tags:
+        - auth
+      summary: Change user password
+      description: Changes the password for the authenticated user
+      operationId: changePassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - currentPassword
+                - newPassword
+              properties:
+                currentPassword:
+                  type: string
+                  example: oldpassword
+                newPassword:
+                  type: string
+                  example: newpassword
+      responses:
+        '200':
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: Password changed successfully
+        '401':
+          description: Current password is incorrect
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /auth/api-keys:
+    post:
+      tags:
+        - auth
+      summary: Generate API key
+      description: Generates a new API key for the authenticated user
+      operationId: generateApiKey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+                  example: My API Key
+      responses:
+        '201':
+          description: API key generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+    
+    get:
+      tags:
+        - auth
+      summary: List API keys
+      description: Lists all API keys for the authenticated user
+      operationId: listApiKeys
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeysListResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+  
+  /auth/api-keys/{id}:
+    delete:
+      tags:
+        - auth
+      summary: Delete API key
+      description: Deletes an API key
+      operationId: deleteApiKey
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: API key deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: API key deleted successfully
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: API key not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+  
+  #
+  # Content Endpoints
+  #
+  /content:
+    get:
+      tags:
+        - content
+      summary: List content items
+      description: Returns a paginated list of content items with optional filtering
+      operationId: listContent
+      parameters:
+        - name: type
+          in: query
+          description: Filter by content type
+          schema:
+            type: string
+            enum: [text, image, video, code, pdf, document]
+        - name: limit
+          in: query
+          description: Maximum number of items to return
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          description: Pagination offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: sort
+          in: query
+          description: Field to sort by
+          schema:
+            type: string
+            default: createdAt
+            enum: [createdAt, updatedAt, title, type]
+        - name: order
+          in: query
+          description: Sort order
+          schema:
+            type: string
+            default: desc
+            enum: [asc, desc]
+        - name: q
+          in: query
+          description: Search query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of content items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentListResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+    
+    post:
+      tags:
+        - content
+      summary: Create content
+      description: Creates a new content item
+      operationId: createContent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContentCreate'
+      responses:
+        '202':
+          description: Content created and processing started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentCreatedResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /content/upload:
+    post:
+      tags:
+        - content
+      summary: Upload content file
+      description: Uploads a file as content
+      operationId: uploadContent
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '202':
+          description: File uploaded and processing started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentCreatedResponse'
+        '400':
+          description: Invalid input or file type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /content/{id}:
+    get:
+      tags:
+        - content
+      summary: Get content
+      description: Returns a specific content item
+      operationId: getContent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Content item
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Content not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+    
+    put:
+      tags:
+        - content
+      summary: Update content
+      description: Updates a content item's metadata
+      operationId: updateContent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - metadata
+              properties:
+                metadata:
+                  type: object
+                  properties:
+                    title:
+                      type: string
+                    description:
+                      type: string
+                    tags:
+                      type: array
+                      items:
+                        type: string
+      responses:
+        '200':
+          description: Content updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Content not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+    
+    delete:
+      tags:
+        - content
+      summary: Delete content
+      description: Deletes a content item
+      operationId: deleteContent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Content deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: Content with ID 123e4567-e89b-12d3-a456-426614174000 deleted successfully
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Content not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /content/{id}/entities:
+    get:
+      tags:
+        - content
+        - entities
+      summary: Get content entities
+      description: Returns entities associated with a content item
+      operationId: getContentEntities
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of entities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityListResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Content not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /content/{id}/related:
+    get:
+      tags:
+        - content
+      summary: Get related content
+      description: Returns content items related to the specified content
+      operationId: getRelatedContent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of related content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentListResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Content not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  #
+  # Entity Management Endpoints
+  #
+  /entities:
+    get:
+      tags:
+        - entities
+      summary: List all entities
+      description: Returns a paginated list of entities with optional filtering
+      operationId: listEntities
+      parameters:
+        - name: type
+          in: query
+          description: Filter by entity type
+          schema:
+            type: string
+            example: person
+        - name: q
+          in: query
+          description: Search query for entity name or properties
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of items to return
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: offset
+          in: query
+          description: Pagination offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: sort
+          in: query
+          description: Field to sort by
+          schema:
+            type: string
+            default: createdAt
+            enum: [createdAt, name, type, confidence]
+        - name: order
+          in: query
+          description: Sort order
+          schema:
+            type: string
+            default: desc
+            enum: [asc, desc]
+        - name: minConfidence
+          in: query
+          description: Minimum confidence score for entities
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 1
+            default: 0.5
+      responses:
+        '200':
+          description: List of entities
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Entity'
+                  meta:
+                    type: object
+                    properties:
+                      pagination:
+                        type: object
+                        properties:
+                          limit:
+                            type: integer
+                            example: 50
+                          offset:
+                            type: integer
+                            example: 0
+                          total:
+                            type: integer
+                            example: 342
+                          next:
+                            type: string
+                            example: /api/v1/entities?limit=50&offset=50
+                            nullable: true
+                          previous:
+                            type: string
+                            example: null
+                            nullable: true
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+    
+    post:
+      tags:
+        - entities
+      summary: Create entity
+      description: Creates a new entity manually
+      operationId: createEntity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntityCreate'
+      responses:
+        '201':
+          description: Entity created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/Entity'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /entities/types:
+    get:
+      tags:
+        - entities
+      summary: Get entity types
+      description: Returns all available entity types with their counts
+      operationId: getEntityTypes
+      responses:
+        '200':
+          description: List of entity types
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          example: person
+                        count:
+                          type: integer
+                          example: 125
+                        description:
+                          type: string
+                          example: Individual person or character
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /entities/{id}:
+    get:
+      tags:
+        - entities
+      summary: Get entity
+      description: Returns a specific entity by ID
+      operationId: getEntity
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Entity details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/Entity'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+    
+    put:
+      tags:
+        - entities
+      summary: Update entity
+      description: Updates an existing entity
+      operationId: updateEntity
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntityUpdate'
+      responses:
+        '200':
+          description: Entity updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/Entity'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+    
+    delete:
+      tags:
+        - entities
+      summary: Delete entity
+      description: Deletes an entity
+      operationId: deleteEntity
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Entity deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: Entity with ID 123e4567-e89b-12d3-a456-426614174000 deleted successfully
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /entities/{id}/related:
+    get:
+      tags:
+        - entities
+      summary: Get related entities
+      description: Returns entities related to the specified entity
+      operationId: getRelatedEntities
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: type
+          in: query
+          description: Filter by relationship type
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of items to return
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: List of related entities
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        entity:
+                          $ref: '#/components/schemas/Entity'
+                        relationship:
+                          type: string
+                          example: worksFor
+                        direction:
+                          type: string
+                          enum: [outgoing, incoming]
+                          example: outgoing
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /entities/{id}/content:
+    get:
+      tags:
+        - entities
+      summary: Get entity content
+      description: Returns content items associated with the specified entity
+      operationId: getEntityContent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          description: Maximum number of items to return
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          description: Pagination offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: List of content items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentListResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /entities/relationships:
+    post:
+      tags:
+        - entities
+      summary: Create relationship
+      description: Creates a relationship between two entities
+      operationId: createRelationship
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - sourceId
+                - targetId
+                - type
+              properties:
+                sourceId:
+                  type: string
+                  format: uuid
+                  example: 123e4567-e89b-12d3-a456-426614174000
+                targetId:
+                  type: string
+                  format: uuid
+                  example: 987e6543-e89b-12d3-a456-426614174000
+                type:
+                  type: string
+                  example: worksFor
+                properties:
+                  type: object
+                  description: Optional additional properties for the relationship
+                  example:
+                    startDate: "2022-05-10"
+                    role: "Engineer"
+      responses:
+        '201':
+          description: Relationship created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        example: 456e7890-f12a-34b5-c678-789012345678
+                      sourceId:
+                        type: string
+                        format: uuid
+                        example: 123e4567-e89b-12d3-a456-426614174000
+                      targetId:
+                        type: string
+                        format: uuid
+                        example: 987e6543-e89b-12d3-a456-426614174000
+                      type:
+                        type: string
+                        example: worksFor
+                      properties:
+                        type: object
+                        example:
+                          startDate: "2022-05-10"
+                          role: "Engineer"
+                      createdAt:
+                        type: string
+                        format: date-time
+                        example: '2025-05-14T04:21:56Z'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Relationship already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /entities/relationships/{id}:
+    delete:
+      tags:
+        - entities
+      summary: Delete relationship
+      description: Deletes a relationship between entities
+      operationId: deleteRelationship
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Relationship deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: Relationship with ID 456e7890-f12a-34b5-c678-789012345678 deleted successfully
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Relationship not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  #
+  # Batch Processing Endpoints
+  #
+  /batch:
+    get:
+      tags:
+        - batch
+      summary: List batch processes
+      description: Returns a paginated list of batch processes with optional filtering
+      operationId: listBatchProcesses
+      parameters:
+        - name: status
+          in: query
+          description: Filter by process status
+          schema:
+            type: string
+            enum: [pending, processing, completed, failed, cancelled]
+        - name: limit
+          in: query
+          description: Maximum number of items to return
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          description: Pagination offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: sort
+          in: query
+          description: Field to sort by
+          schema:
+            type: string
+            default: createdAt
+            enum: [createdAt, updatedAt, status]
+        - name: order
+          in: query
+          description: Sort order
+          schema:
+            type: string
+            default: desc
+            enum: [asc, desc]
+      responses:
+        '200':
+          description: List of batch processes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BatchProcess'
+                  meta:
+                    type: object
+                    properties:
+                      pagination:
+                        type: object
+                        properties:
+                          limit:
+                            type: integer
+                            example: 20
+                          offset:
+                            type: integer
+                            example: 0
+                          total:
+                            type: integer
+                            example: 15
+                          next:
+                            type: string
+                            example: null
+                            nullable: true
+                          previous:
+                            type: string
+                            example: null
+                            nullable: true
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+    
+    post:
+      tags:
+        - batch
+      summary: Create batch process
+      description: Creates a new batch processing job
+      operationId: createBatchProcess
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchProcessCreate'
+      responses:
+        '202':
+          description: Batch process created and queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/BatchProcess'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /batch/{id}:
+    get:
+      tags:
+        - batch
+      summary: Get batch process
+      description: Returns details of a specific batch process
+      operationId: getBatchProcess
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Batch process details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/BatchProcess'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Batch process not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /batch/{id}/cancel:
+    post:
+      tags:
+        - batch
+      summary: Cancel batch process
+      description: Cancels a running or pending batch process
+      operationId: cancelBatchProcess
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Batch process cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: Batch process cancelled successfully
+                      id:
+                        type: string
+                        format: uuid
+                        example: 123e4567-e89b-12d3-a456-426614174000
+                      status:
+                        type: string
+                        enum: [cancelled]
+                        example: cancelled
+        '400':
+          description: Batch process cannot be cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Batch process not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /batch/{id}/items:
+    get:
+      tags:
+        - batch
+      summary: List batch process items
+      description: Returns items in a batch process with their individual status
+      operationId: listBatchProcessItems
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          description: Filter by item status
+          schema:
+            type: string
+            enum: [pending, processing, completed, failed, skipped]
+        - name: limit
+          in: query
+          description: Maximum number of items to return
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+        - name: offset
+          in: query
+          description: Pagination offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: List of batch process items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BatchProcessItem'
+                  meta:
+                    type: object
+                    properties:
+                      pagination:
+                        type: object
+                        properties:
+                          limit:
+                            type: integer
+                            example: 100
+                          offset:
+                            type: integer
+                            example: 0
+                          total:
+                            type: integer
+                            example: 350
+                          next:
+                            type: string
+                            example: /api/v1/batch/123e4567-e89b-12d3-a456-426614174000/items?limit=100&offset=100
+                            nullable: true
+                          previous:
+                            type: string
+                            example: null
+                            nullable: true
+                      status:
+                        type: object
+                        properties:
+                          pending:
+                            type: integer
+                            example: 200
+                          processing:
+                            type: integer
+                            example: 50
+                          completed:
+                            type: integer
+                            example: 95
+                          failed:
+                            type: integer
+                            example: 5
+                          skipped:
+                            type: integer
+                            example: 0
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Batch process not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  #
+  # System Endpoints
+  #
+  /system/status:
+    get:
+      tags:
+        - system
+      summary: Get system status
+      description: Returns the current system status and resource usage
+      operationId: getSystemStatus
+      responses:
+        '200':
+          description: System status information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum: [healthy, degraded, maintenance]
+                        example: healthy
+                      uptime:
+                        type: number
+                        example: 1209600
+                        description: System uptime in seconds
+                      version:
+                        type: string
+                        example: 1.5.2
+                      resources:
+                        type: object
+                        properties:
+                          cpu:
+                            type: object
+                            properties:
+                              usage:
+                                type: number
+                                format: float
+                                example: 24.5
+                                description: CPU usage percentage
+                              cores:
+                                type: integer
+                                example: 4
+                          memory:
+                            type: object
+                            properties:
+                              total:
+                                type: integer
+                                example: 8589934592
+                                description: Total memory in bytes
+                              used:
+                                type: integer
+                                example: 4294967296
+                                description: Used memory in bytes
+                              percentage:
+                                type: number
+                                format: float
+                                example: 50.0
+                                description: Memory usage percentage
+                          storage:
+                            type: object
+                            properties:
+                              total:
+                                type: integer
+                                example: 107374182400
+                                description: Total storage in bytes
+                              used:
+                                type: integer
+                                example: 64424509440
+                                description: Used storage in bytes
+                              percentage:
+                                type: number
+                                format: float
+                                example: 60.0
+                                description: Storage usage percentage
+                      services:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                              example: claude-api
+                            status:
+                              type: string
+                              enum: [healthy, degraded, down]
+                              example: healthy
+                            latency:
+                              type: number
+                              format: float
+                              example: 230.5
+                              description: Service latency in milliseconds
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /system/info:
+    get:
+      tags:
+        - system
+      summary: Get system information
+      description: Returns general information about the ingestor system
+      operationId: getSystemInfo
+      responses:
+        '200':
+          description: System information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        example: Ingestor System
+                      version:
+                        type: string
+                        example: 1.5.2
+                      description:
+                        type: string
+                        example: Document processing system with entity extraction capabilities
+                      buildDate:
+                        type: string
+                        format: date-time
+                        example: '2025-04-01T00:00:00Z'
+                      claudeVersion:
+                        type: string
+                        example: claude-3-7-sonnet-20250219
+                      features:
+                        type: array
+                        items:
+                          type: string
+                        example: ["text-extraction", "image-analysis", "code-analysis", "pdf-processing", "document-chunking", "entity-extraction", "batch-processing"]
+                      maxUploadSize:
+                        type: integer
+                        example: 104857600
+                        description: Maximum upload size in bytes
+                      supportedFormats:
+                        type: object
+                        properties:
+                          text:
+                            type: array
+                            items:
+                              type: string
+                            example: [".txt", ".md", ".json", ".csv", ".xml"]
+                          image:
+                            type: array
+                            items:
+                              type: string
+                            example: [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+                          document:
+                            type: array
+                            items:
+                              type: string
+                            example: [".docx", ".doc", ".odt", ".rtf"]
+                          code:
+                            type: array
+                            items:
+                              type: string
+                            example: [".py", ".js", ".ts", ".java", ".c", ".cpp", ".go", ".rs"]
+                          pdf:
+                            type: array
+                            items:
+                              type: string
+                            example: [".pdf"]
+                          video:
+                            type: array
+                            items:
+                              type: string
+                            example: [".mp4", ".mov", ".avi", ".webm"]
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /system/config:
+    get:
+      tags:
+        - system
+      summary: Get system configuration
+      description: Returns the current system configuration
+      operationId: getSystemConfig
+      responses:
+        '200':
+          description: System configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      processing:
+                        type: object
+                        properties:
+                          defaultChunkSize:
+                            type: integer
+                            example: 500000
+                          defaultChunkOverlap:
+                            type: integer
+                            example: 5000
+                          defaultChunkStrategy:
+                            type: string
+                            example: size
+                          maxConcurrentProcesses:
+                            type: integer
+                            example: 5
+                          processingTimeout:
+                            type: integer
+                            example: 600
+                            description: Processing timeout in seconds
+                      extraction:
+                        type: object
+                        properties:
+                          defaultMinConfidence:
+                            type: number
+                            format: float
+                            example: 0.5
+                          entityTypes:
+                            type: array
+                            items:
+                              type: string
+                            example: ["person", "organization", "location", "date", "concept", "technology", "event"]
+                          relationshipTypes:
+                            type: array
+                            items:
+                              type: string
+                            example: ["worksFor", "createdBy", "locatedIn", "partOf", "references", "uses"]
+                      batch:
+                        type: object
+                        properties:
+                          maxBatchSize:
+                            type: integer
+                            example: 1000
+                          maxConcurrentItems:
+                            type: integer
+                            example: 10
+                          batchTimeout:
+                            type: integer
+                            example: 86400
+                            description: Batch timeout in seconds
+                      api:
+                        type: object
+                        properties:
+                          rateLimits:
+                            type: object
+                            properties:
+                              defaultPerMinute:
+                                type: integer
+                                example: 60
+                              uploadPerMinute:
+                                type: integer
+                                example: 10
+                              batchPerHour:
+                                type: integer
+                                example: 5
+                      storage:
+                        type: object
+                        properties:
+                          contentRetentionDays:
+                            type: integer
+                            example: 90
+                          maxContentSize:
+                            type: integer
+                            example: 104857600
+                            description: Maximum content size in bytes
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+  
+  /system/statistics:
+    get:
+      tags:
+        - system
+      summary: Get system statistics
+      description: Returns system usage statistics
+      operationId: getSystemStatistics
+      parameters:
+        - name: period
+          in: query
+          description: Time period for statistics
+          schema:
+            type: string
+            enum: [day, week, month, year]
+            default: week
+      responses:
+        '200':
+          description: System statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      timeframe:
+                        type: object
+                        properties:
+                          start:
+                            type: string
+                            format: date-time
+                            example: '2025-05-07T00:00:00Z'
+                          end:
+                            type: string
+                            format: date-time
+                            example: '2025-05-14T23:59:59Z'
+                          period:
+                            type: string
+                            enum: [day, week, month, year]
+                            example: week
+                      content:
+                        type: object
+                        properties:
+                          total:
+                            type: integer
+                            example: 256
+                          byType:
+                            type: object
+                            properties:
+                              text:
+                                type: integer
+                                example: 120
+                              image:
+                                type: integer
+                                example: 50
+                              pdf:
+                                type: integer
+                                example: 45
+                              code:
+                                type: integer
+                                example: 30
+                              document:
+                                type: integer
+                                example: 10
+                              video:
+                                type: integer
+                                example: 1
+                          totalSize:
+                            type: integer
+                            example: 536870912
+                            description: Total content size in bytes
+                      entities:
+                        type: object
+                        properties:
+                          total:
+                            type: integer
+                            example: 1834
+                          byType:
+                            type: object
+                            additionalProperties:
+                              type: integer
+                            example:
+                              person: 523
+                              organization: 245
+                              location: 167
+                              date: 320
+                              concept: 425
+                              technology: 154
+                      processing:
+                        type: object
+                        properties:
+                          totalProcessingTime:
+                            type: number
+                            example: 12589.5
+                            description: Total processing time in seconds
+                          averageProcessingTime:
+                            type: number
+                            format: float
+                            example: 49.17
+                            description: Average processing time in seconds
+                          successRate:
+                            type: number
+                            format: float
+                            example: 98.5
+                            description: Success rate percentage
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+
+components:
+  schemas:
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            user:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                  example: 123e4567-e89b-12d3-a456-426614174000
+                username:
+                  type: string
+                  example: admin
+                role:
+                  type: string
+                  enum: [user, admin]
+                  example: admin
+    
+    UserResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+              example: 123e4567-e89b-12d3-a456-426614174000
+            username:
+              type: string
+              example: admin
+            role:
+              type: string
+              enum: [user, admin]
+              example: admin
+            createdAt:
+              type: string
+              format: date-time
+              example: '2025-05-14T04:21:56Z'
+    
+    ApiKeyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+              example: 123e4567-e89b-12d3-a456-426614174000
+            apiKey:
+              type: string
+              example: MTIzZTQ1NjctZTg5Yi0xMmQzLWE0NTYtNDI2NjE0MTc0MDAwMTIzZTQ1NjctZTg5Yi0xMmQzLWE0NTYtNDI2NjE0MTc0MDAw
+            description:
+              type: string
+              example: My API Key
+            createdAt:
+              type: string
+              format: date-time
+              example: '2025-05-14T04:21:56Z'
+    
+    ApiKeysListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+                example: 123e4567-e89b-12d3-a456-426614174000
+              description:
+                type: string
+                example: My API Key
+              createdAt:
+                type: string
+                format: date-time
+                example: '2025-05-14T04:21:56Z'
+              lastUsed:
+                type: string
+                format: date-time
+                example: '2025-05-14T08:45:33Z'
+    
+    ContentCreate:
+      type: object
+      required:
+        - content
+        - type
+      properties:
+        content:
+          type: string
+          example: This is a sample text document about artificial intelligence.
+        type:
+          type: string
+          enum: [text, image, video, code, pdf, document]
+          example: text
+        filename:
+          type: string
+          example: sample.txt
+        metadata:
+          type: object
+          properties:
+            title:
+              type: string
+              example: Sample Text Document
+            description:
+              type: string
+              example: A sample document for testing
+            tags:
+              type: array
+              items:
+                type: string
+              example: [sample, ai]
+        processingOptions:
+          type: object
+          properties:
+            extractEntities:
+              type: boolean
+              default: true
+            enableChunking:
+              type: boolean
+              default: true
+            chunkSize:
+              type: integer
+              default: 500000
+              minimum: 1000
+              maximum: 1000000
+            chunkOverlap:
+              type: integer
+              default: 5000
+              minimum: 0
+              maximum: 50000
+            chunkStrategy:
+              type: string
+              enum: [size, paragraph, sentence]
+              default: size
+    
+    ContentCreatedResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+              example: 123e4567-e89b-12d3-a456-426614174000
+            type:
+              type: string
+              enum: [text, image, video, code, pdf, document]
+              example: text
+            filename:
+              type: string
+              example: sample.txt
+            status:
+              type: string
+              enum: [processing, completed, failed]
+              example: processing
+            metadata:
+              type: object
+              properties:
+                title:
+                  type: string
+                  example: Sample Text Document
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  example: [sample, ai]
+                contentLength:
+                  type: integer
+                  example: 102
+                mimeType:
+                  type: string
+                  example: text/plain
+            processingId:
+              type: string
+              format: uuid
+              example: 987e6543-e89b-12d3-a456-426614174000
+            createdAt:
+              type: string
+              format: date-time
+              example: '2025-05-14T04:21:56Z'
+            links:
+              type: object
+              properties:
+                self:
+                  type: string
+                  example: /api/v1/content/123e4567-e89b-12d3-a456-426614174000
+                processing:
+                  type: string
+                  example: /api/v1/processing/987e6543-e89b-12d3-a456-426614174000
+    
+    ContentResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+              example: 123e4567-e89b-12d3-a456-426614174000
+            type:
+              type: string
+              enum: [text, image, video, code, pdf, document]
+              example: text
+            filename:
+              type: string
+              example: sample.txt
+            status:
+              type: string
+              enum: [processing, completed, failed]
+              example: completed
+            metadata:
+              type: object
+              properties:
+                title:
+                  type: string
+                  example: Sample Text Document
+                description:
+                  type: string
+                  example: A sample document for testing
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  example: [sample, ai]
+                contentLength:
+                  type: integer
+                  example: 102
+                mimeType:
+                  type: string
+                  example: text/plain
+            processingId:
+              type: string
+              format: uuid
+              example: 987e6543-e89b-12d3-a456-426614174000
+            createdAt:
+              type: string
+              format: date-time
+              example: '2025-05-14T04:21:56Z'
+            processedAt:
+              type: string
+              format: date-time
+              example: '2025-05-14T04:22:10Z'
+            links:
+              type: object
+              properties:
+                self:
+                  type: string
+                  example: /api/v1/content/123e4567-e89b-12d3-a456-426614174000
+                processing:
+                  type: string
+                  example: /api/v1/processing/987e6543-e89b-12d3-a456-426614174000
+                entities:
+                  type: string
+                  example: /api/v1/content/123e4567-e89b-12d3-a456-426614174000/entities
+                related:
+                  type: string
+                  example: /api/v1/content/123e4567-e89b-12d3-a456-426614174000/related
+    
+    ContentListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContentResponse/properties/data'
+        meta:
+          type: object
+          properties:
+            pagination:
+              type: object
+              properties:
+                limit:
+                  type: integer
+                  example: 20
+                offset:
+                  type: integer
+                  example: 0
+                total:
+                  type: integer
+                  example: 156
+                next:
+                  type: string
+                  example: /api/v1/content?limit=20&offset=20
+                  nullable: true
+                previous:
+                  type: string
+                  example: null
+                  nullable: true
+    
+    Entity:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174000
+        type:
+          type: string
+          example: person
+        name:
+          type: string
+          example: Claude
+        properties:
+          type: object
+          properties:
+            description:
+              type: string
+              example: AI assistant
+            organization:
+              type: string
+              example: Anthropic
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.95
+        source:
+          type: string
+          enum: [extraction, manual, import]
+          example: extraction
+        createdAt:
+          type: string
+          format: date-time
+          example: '2025-05-14T04:22:10Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2025-05-14T04:22:10Z'
+        contentCount:
+          type: integer
+          example: 5
+          description: Number of content items where this entity appears
+        links:
+          type: object
+          properties:
+            self:
+              type: string
+              example: /api/v1/entities/123e4567-e89b-12d3-a456-426614174000
+            related:
+              type: string
+              example: /api/v1/entities/123e4567-e89b-12d3-a456-426614174000/related
+            content:
+              type: string
+              example: /api/v1/entities/123e4567-e89b-12d3-a456-426614174000/content
+    
+    EntityCreate:
+      type: object
+      required:
+        - name
+        - type
+      properties:
+        name:
+          type: string
+          example: Claude
+        type:
+          type: string
+          example: person
+        properties:
+          type: object
+          properties:
+            description:
+              type: string
+              example: AI assistant
+            organization:
+              type: string
+              example: Anthropic
+            customProperties:
+              type: object
+              additionalProperties: true
+              example:
+                role: Assistant
+                language: English
+        contentIds:
+          type: array
+          description: IDs of content items to associate with this entity
+          items:
+            type: string
+            format: uuid
+          example: ["123e4567-e89b-12d3-a456-426614174001", "123e4567-e89b-12d3-a456-426614174002"]
+    
+    EntityUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Claude AI
+        type:
+          type: string
+          example: person
+        properties:
+          type: object
+          properties:
+            description:
+              type: string
+              example: Advanced AI assistant
+            organization:
+              type: string
+              example: Anthropic
+            customProperties:
+              type: object
+              additionalProperties: true
+              example:
+                role: Advanced Assistant
+                language: English
+    
+    EntityListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Entity'
+    
+    BatchProcessCreate:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum: [folder-import, url-crawl, entity-extraction, reprocess, content-analysis]
+          example: folder-import
+        name:
+          type: string
+          example: Import Customer Documentation
+        description:
+          type: string
+          example: Batch import of customer documentation folder
+        options:
+          type: object
+          properties:
+            path:
+              type: string
+              example: /uploads/customer-docs/
+            recursive:
+              type: boolean
+              example: true
+            fileTypes:
+              type: array
+              items:
+                type: string
+              example: [".pdf", ".docx", ".txt"]
+            extractEntities:
+              type: boolean
+              example: true
+            urls:
+              type: array
+              items:
+                type: string
+              example: ["https://example.com/docs/", "https://example.com/guides/"]
+            crawlDepth:
+              type: integer
+              example: 2
+            contentIds:
+              type: array
+              items:
+                type: string
+                format: uuid
+              example: ["123e4567-e89b-12d3-a456-426614174001", "123e4567-e89b-12d3-a456-426614174002"]
+            filters:
+              type: object
+              properties:
+                contentType:
+                  type: array
+                  items:
+                    type: string
+                  example: ["pdf", "document"]
+                createdAfter:
+                  type: string
+                  format: date-time
+                  example: '2025-04-01T00:00:00Z'
+                createdBefore:
+                  type: string
+                  format: date-time
+                  example: '2025-05-01T00:00:00Z'
+        priority:
+          type: string
+          enum: [low, normal, high]
+          default: normal
+          example: normal
+        callback:
+          type: object
+          properties:
+            url:
+              type: string
+              example: https://example.com/webhook/batch-complete
+            headers:
+              type: object
+              additionalProperties:
+                type: string
+              example:
+                X-API-Key: abcdef123456
+    
+    BatchProcess:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174000
+        name:
+          type: string
+          example: Import Customer Documentation
+        description:
+          type: string
+          example: Batch import of customer documentation folder
+        type:
+          type: string
+          enum: [folder-import, url-crawl, entity-extraction, reprocess, content-analysis]
+          example: folder-import
+        status:
+          type: string
+          enum: [pending, processing, completed, failed, cancelled]
+          example: processing
+        progress:
+          type: object
+          properties:
+            total:
+              type: integer
+              example: 350
+            completed:
+              type: integer
+              example: 95
+            failed:
+              type: integer
+              example: 5
+            processing:
+              type: integer
+              example: 50
+            pending:
+              type: integer
+              example: 200
+            skipped:
+              type: integer
+              example: 0
+            percentage:
+              type: number
+              format: float
+              example: 27.14
+        options:
+          type: object
+          properties:
+            path:
+              type: string
+              example: /uploads/customer-docs/
+            recursive:
+              type: boolean
+              example: true
+            fileTypes:
+              type: array
+              items:
+                type: string
+              example: [".pdf", ".docx", ".txt"]
+        priority:
+          type: string
+          enum: [low, normal, high]
+          example: normal
+        createdAt:
+          type: string
+          format: date-time
+          example: '2025-05-14T04:21:56Z'
+        startedAt:
+          type: string
+          format: date-time
+          example: '2025-05-14T04:22:00Z'
+        completedAt:
+          type: string
+          format: date-time
+          example: null
+          nullable: true
+        estimatedCompletionAt:
+          type: string
+          format: date-time
+          example: '2025-05-14T05:30:00Z'
+          nullable: true
+        createdBy:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174000
+        links:
+          type: object
+          properties:
+            self:
+              type: string
+              example: /api/v1/batch/123e4567-e89b-12d3-a456-426614174000
+            items:
+              type: string
+              example: /api/v1/batch/123e4567-e89b-12d3-a456-426614174000/items
+            cancel:
+              type: string
+              example: /api/v1/batch/123e4567-e89b-12d3-a456-426614174000/cancel
+              nullable: true
+    
+    BatchProcessItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174001
+        batchId:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174000
+        type:
+          type: string
+          enum: [file, content, url]
+          example: file
+        status:
+          type: string
+          enum: [pending, processing, completed, failed, skipped]
+          example: completed
+        source:
+          type: string
+          example: /uploads/customer-docs/guide.pdf
+        contentId:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174002
+          nullable: true
+        error:
+          type: object
+          nullable: true
+          properties:
+            code:
+              type: string
+              example: FILE_PROCESSING_ERROR
+            message:
+              type: string
+              example: Failed to process file due to corrupted format
+        processingTime:
+          type: number
+          format: float
+          example: 5.23
+          description: Processing time in seconds
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          example: '2025-05-14T04:22:00Z'
+        startedAt:
+          type: string
+          format: date-time
+          example: '2025-05-14T04:22:05Z'
+        completedAt:
+          type: string
+          format: date-time
+          example: '2025-05-14T04:22:10Z'
+          nullable: true
+    
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              example: Validation error
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  path:
+                    type: string
+                    example: content
+                  message:
+                    type: string
+                    example: Content is required
+  
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key

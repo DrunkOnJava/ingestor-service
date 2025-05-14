@@ -4,6 +4,7 @@
 
 import { Logger, LogLevel } from './core/logging';
 import { IngestorMcpServer } from './api/mcp';
+import { startApiServer, stopApiServer } from './api';
 
 // Create main logger
 const logger = new Logger('ingestor', {
@@ -50,10 +51,35 @@ async function main() {
         process.exit(0);
       });
     } 
+    // Start API server
+    else if (args.startApi) {
+      const apiPort = args.apiPort ? parseInt(args.apiPort, 10) : 3000;
+      
+      logger.info(`Starting API server on port ${apiPort}`);
+      
+      await startApiServer({
+        port: apiPort
+      });
+      
+      // Handle process signals
+      process.on('SIGINT', async () => {
+        logger.info('Received SIGINT, shutting down API server');
+        await stopApiServer();
+        process.exit(0);
+      });
+      
+      process.on('SIGTERM', async () => {
+        logger.info('Received SIGTERM, shutting down API server');
+        await stopApiServer();
+        process.exit(0);
+      });
+    }
     // Run ingestor CLI mode
     else {
       logger.info('Running in CLI mode');
-      // Implement CLI functionality here
+      // CLI functionality is handled separately in src/cli/index.ts
+      logger.info('Please use the CLI module directly for command-line operations');
+      process.exit(0);
     }
   } catch (error) {
     logger.error(`Error in main: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -69,7 +95,8 @@ function parseCommandLineArgs() {
   const args: Record<string, string | boolean> = {
     startMcp: false,
     httpMcp: false,
-    debug: false
+    debug: false,
+    startApi: false
   };
   
   // Process command line arguments
@@ -81,10 +108,14 @@ function parseCommandLineArgs() {
     } else if (arg === '--http') {
       args.httpMcp = true;
       args.startMcp = true;
+    } else if (arg === '--api') {
+      args.startApi = true;
     } else if (arg === '--debug') {
       args.debug = true;
     } else if (arg === '--port' && i + 1 < process.argv.length) {
       args.port = process.argv[++i];
+    } else if (arg === '--api-port' && i + 1 < process.argv.length) {
+      args.apiPort = process.argv[++i];
     } else if (arg.startsWith('--')) {
       const key = arg.substring(2);
       const value = i + 1 < process.argv.length && !process.argv[i + 1].startsWith('--') 
