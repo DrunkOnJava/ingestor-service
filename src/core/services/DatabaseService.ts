@@ -8,6 +8,22 @@ import sqlite3 from 'sqlite3';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { Logger } from '../logging';
+import { Cache, CacheOptions } from '../utils/Cache';
+
+/**
+ * Database service configuration
+ */
+export interface DatabaseServiceConfig {
+  /**
+   * Enable entity caching
+   */
+  enableCache?: boolean;
+  
+  /**
+   * Cache options for entity lookups
+   */
+  cacheOptions?: CacheOptions;
+}
 
 /**
  * Service for interacting with SQLite databases
@@ -18,14 +34,38 @@ export class DatabaseService {
   private dbPath?: string;
   private connected: boolean = false;
   
+  // Cache for entity lookups
+  private entityCache: Cache<string, any>;
+  private entityByIdCache: Cache<number, any>;
+  private config: Required<DatabaseServiceConfig>;
+  
   /**
    * Creates a new DatabaseService instance
    * @param logger Logger instance
    * @param dbPath Optional database path to connect immediately
+   * @param config Optional database service configuration
    */
-  constructor(logger: Logger, dbPath?: string) {
+  constructor(
+    logger: Logger, 
+    dbPath?: string, 
+    config: DatabaseServiceConfig = {}
+  ) {
     this.logger = logger;
     this.dbPath = dbPath;
+    
+    // Set default configuration
+    this.config = {
+      enableCache: config.enableCache !== undefined ? config.enableCache : true,
+      cacheOptions: config.cacheOptions || {
+        maxSize: 1000,
+        ttl: 30 * 60 * 1000, // 30 minutes
+        autoPrune: true
+      }
+    };
+    
+    // Initialize caches
+    this.entityCache = new Cache<string, any>(logger, this.config.cacheOptions);
+    this.entityByIdCache = new Cache<number, any>(logger, this.config.cacheOptions);
     
     if (dbPath) {
       this.connect(dbPath).catch(err => {
@@ -226,6 +266,28 @@ export class DatabaseService {
   }
   
   /**
+   * Clear the entity caches
+   */
+  public clearEntityCache(): void {
+    this.entityCache.clear();
+    this.entityByIdCache.clear();
+    this.logger.debug('Entity caches cleared');
+  }
+  
+  /**
+   * Get cache statistics for entity caches
+   */
+  public getEntityCacheStats(): {
+    byKey: { size: number; maxSize: number; ttl: number };
+    byId: { size: number; maxSize: number; ttl: number };
+  } {
+    return {
+      byKey: this.entityCache.stats(),
+      byId: this.entityByIdCache.stats()
+    };
+  }
+  
+  /**
    * Store an entity in the database
    * @param name Entity name
    * @param type Entity type
@@ -260,6 +322,14 @@ export class DatabaseService {
       if (result && result.length > 0) {
         const entityId = result[0].id;
         this.logger.debug(`Entity stored with ID ${entityId}`);
+        
+        // Invalidate caches for this entity
+        if (this.config.enableCache) {
+          const cacheKey = `${name}:${type}`;
+          this.entityCache.delete(cacheKey);
+          this.entityByIdCache.delete(entityId);
+        }
+        
         return entityId;
       }
       
@@ -267,6 +337,136 @@ export class DatabaseService {
     } catch (error) {
       this.logger.error(`Failed to store entity: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return null;
+    }
+  }
+  
+  /**
+   * Get an entity by ID
+   * @param id Entity ID
+   * @returns Entity object or undefined if not found
+   */
+  public async getEntity(id: number): Promise<any | undefined> {
+    if (!this.db || !this.connected) {
+      throw new Error('Database not connected');
+    }
+    
+    try {
+      // Try to get from cache first if enabled
+      if (this.config.enableCache) {
+        const cachedEntity = this.entityByIdCache.get(id);
+        if (cachedEntity) {
+          this.logger.debug(`Retrieved entity ${id} from cache`);
+          return cachedEntity;
+        }
+      }
+      
+      this.logger.debug(`Getting entity with ID ${id}`);
+      
+      // Get the entity from the database
+      const entity = await this.queryOne(
+        `SELECT id, name, entity_type, description, created_at, updated_at
+         FROM entities
+         WHERE id = ?`,
+        [id]
+      );
+      
+      if (!entity) {
+        this.logger.debug(`No entity found with ID ${id}`);
+        return undefined;
+      }
+      
+      // Get entity mentions
+      const mentions = await this.query(
+        `SELECT id, text, offset, length, confidence, created_at
+         FROM entity_mentions
+         WHERE entity_id = ?
+         ORDER BY confidence DESC`,
+        [id]
+      );
+      
+      const result = {
+        ...entity,
+        mentions: mentions || []
+      };
+      
+      // Cache the result if caching is enabled
+      if (this.config.enableCache) {
+        this.entityByIdCache.set(id, result);
+        
+        // Also cache by name:type
+        const cacheKey = `${entity.name}:${entity.entity_type}`;
+        this.entityCache.set(cacheKey, result);
+      }
+      
+      return result;
+    } catch (error) {
+      this.logger.error(`Failed to get entity: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return undefined;
+    }
+  }
+  
+  /**
+   * Get an entity by name and type
+   * @param name Entity name
+   * @param type Entity type
+   * @returns Entity object or undefined if not found
+   */
+  public async getEntityByNameAndType(name: string, type: string): Promise<any | undefined> {
+    if (!this.db || !this.connected) {
+      throw new Error('Database not connected');
+    }
+    
+    try {
+      const cacheKey = `${name}:${type}`;
+      
+      // Try to get from cache first if enabled
+      if (this.config.enableCache) {
+        const cachedEntity = this.entityCache.get(cacheKey);
+        if (cachedEntity) {
+          this.logger.debug(`Retrieved entity ${name} (${type}) from cache`);
+          return cachedEntity;
+        }
+      }
+      
+      this.logger.debug(`Getting entity: ${name} (${type})`);
+      
+      // Get the entity from the database
+      const entity = await this.queryOne(
+        `SELECT id, name, entity_type, description, created_at, updated_at
+         FROM entities
+         WHERE name = ? AND entity_type = ?`,
+        [name, type]
+      );
+      
+      if (!entity) {
+        this.logger.debug(`No entity found: ${name} (${type})`);
+        return undefined;
+      }
+      
+      // Get entity mentions
+      const mentions = await this.query(
+        `SELECT id, text, offset, length, confidence, created_at
+         FROM entity_mentions
+         WHERE entity_id = ?
+         ORDER BY confidence DESC`,
+        [entity.id]
+      );
+      
+      const result = {
+        ...entity,
+        mentions: mentions || []
+      };
+      
+      // Cache the result if caching is enabled
+      if (this.config.enableCache) {
+        this.entityCache.set(cacheKey, result);
+        this.entityByIdCache.set(entity.id, result);
+      }
+      
+      return result;
+    } catch (error) {
+      this.logger.error(`Failed to get entity: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return undefined;
     }
   }
   
