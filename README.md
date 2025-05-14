@@ -14,12 +14,14 @@ The system is designed to be modular, with separate components for content detec
 
 - **Content Processing**: Analyze text, code, PDFs, images, and more
 - **Entity Extraction**: Extract people, organizations, dates, and other entities
+- **Parallel Processing**: Efficiently process batches using worker threads
 - **Content Chunking**: Efficiently process large files
 - **SQLite Storage**: Store content and entities with optimized indexes
 - **Full-Text Search**: Search across all content and entities
 - **Claude AI Integration**: Use Claude for enhanced entity recognition
 - **MCP Server**: Claude Model Context Protocol implementation
 - **TypeScript Architecture**: Modular design with strong typing
+- **Command Line Interface**: Intuitive CLI for all system operations
 
 ## Installation
 
@@ -54,6 +56,30 @@ The built system will:
 
 ## Usage
 
+### Command Line Interface
+
+The system now provides a comprehensive CLI for all operations:
+
+```bash
+# Get help
+ingestor --help
+
+# Process a file
+ingestor process path/to/file.pdf
+
+# Extract entities from text
+ingestor extract "Apple Inc. was founded by Steve Jobs in 1976"
+
+# Search the database
+ingestor search "Apple" --entity-type organization
+
+# Start the MCP server
+ingestor serve --port 3000
+
+# Manage database
+ingestor db --backup daily
+```
+
 ### MCP Server
 
 Start the MCP server for Claude integration:
@@ -64,6 +90,9 @@ npm run mcp
 
 # Start with HTTP transport (for other clients)
 npm run mcp:http --port 3000
+
+# Or use the CLI
+ingestor serve --transport http --port 3000
 ```
 
 ### TypeScript API
@@ -106,6 +135,68 @@ Content can be chunked for efficient processing of large files using different s
 - Paragraph-based chunking
 - Token-based chunking
 
+### Parallel Processing
+
+The system now supports parallel content processing using worker threads:
+
+```typescript
+// Process files in parallel
+const result = await batchProcessor.processBatch(filePaths, {
+  useWorkerThreads: true,          // Enable parallel processing
+  maxConcurrency: 8,               // Control parallelism level
+  dynamicConcurrency: true,        // Adjust based on system load
+  workerMemoryLimit: 512           // Memory limit per worker (MB)
+});
+
+// Track progress
+batchProcessor.on('progress', (progress) => {
+  console.log(`Progress: ${progress.percentComplete.toFixed(2)}%`);
+});
+```
+
+Key benefits:
+- **Improved Performance**: Up to 4-5x faster batch processing on multi-core systems
+- **Resource Optimization**: Automatically adjusts to available CPU and memory
+- **Simplified API**: Same interface as standard processing
+- **Resilience**: Automatic fallback to standard processing if needed
+
+For detailed configuration options, see the [Parallel Processing Guide](docs/operations/parallel_processing_guide.md).
+
+## Project Status
+
+### Completed Phases
+
+#### Phase 1: Core Architecture
+- ✅ Modular TypeScript architecture
+- ✅ Entity extraction engine
+- ✅ Content processing pipeline
+- ✅ SQLite database integration
+- ✅ Logging and error handling systems
+
+#### Phase 2: User Interface & Integration
+- ✅ Command Line Interface implementation
+- ✅ Claude MCP server integration
+- ✅ Full-text search capabilities
+- ✅ Configuration management
+- ✅ Documentation & examples
+
+### Development Roadmap
+
+#### Phase 3: Advanced Features (In Progress)
+- 🔄 Real-time content monitoring
+- 🔄 Advanced entity relationship mapping
+- 🔄 Data visualization and reporting
+- 🔄 Plugin system for custom extractors
+- ⬜ API server for third-party integration
+
+#### Phase 4: Performance & Scale (In Progress)
+- ✅ Performance optimization for large datasets
+- ✅ Parallel processing with worker threads
+- ⬜ Multi-database support (PostgreSQL)
+- ⬜ Distributed processing capabilities
+- ⬜ Cloud storage integration
+- ⬜ Containerization and deployment tools
+
 ## Architecture
 
 The system follows a modular architecture with clear separation of concerns:
@@ -127,6 +218,9 @@ ingestor-system/
 │   │   └── utils/        # Utility functions
 │   ├── api/              # External interfaces
 │   │   └── mcp/          # MCP server implementation
+│   ├── cli/              # Command Line Interface
+│   │   ├── commands/     # CLI command implementations
+│   │   └── utils/        # CLI utilities
 │   └── index.ts          # Main entry point
 ├── tests/                # Test suite
 │   ├── unit/             # Unit tests
@@ -220,6 +314,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entity_fts USING fts5(
   content='entities',
   content_rowid='id'
 );
+```
 
 ## Development
 
@@ -286,6 +381,31 @@ export class PdfEntityExtractor extends EntityExtractor {
 1. Define your tool in `src/api/mcp/IngestorMcpServer.ts`
 2. Implement the handler method
 3. Add the tool to the routing logic in `handleToolRequest()`
+
+#### Adding a CLI Command
+
+1. Create a new command in `src/cli/commands/`
+2. Implement the command handler and options
+3. Register your command in the CLI application
+
+```typescript
+// Example: Create a new CLI command
+import { Command } from 'commander';
+
+export const createExportCommand = (): Command => {
+  const command = new Command('export')
+    .description('Export entities to different formats')
+    .option('-f, --format <format>', 'Output format (json, csv, markdown)', 'json')
+    .option('-o, --output <file>', 'Output file path')
+    .option('-t, --type <entityType>', 'Filter by entity type')
+    .action(async (options) => {
+      // Command implementation here
+      // ...
+    });
+
+  return command;
+};
+```
 
 ### Contributing
 
